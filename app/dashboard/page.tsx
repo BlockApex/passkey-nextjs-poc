@@ -5,25 +5,29 @@ import { useRouter } from 'next/navigation';
 import TransferModal from './components/TransferModal';
 import TransactionHistoryList from './components/TransactionHistoryList';
 
-interface Balance {
-    symbol: string;
-    name: string;
-    balance: string;
-    decimals: number;
-    address: string;
-}
-
-interface ChainPortfolio {
+interface ChainBreakdown {
     chainId: number;
     type: 'evm' | 'svm';
+    network: string;
     address: string;
-    network?: string;
-    assets: Balance[];
+    balance: string;
+    usdValue: number;
+}
+
+interface Asset {
+    symbol: string;
+    name: string;
+    totalBalance: string;
+    totalUsdValue: string;
+    price: string;
+    decimals: number;
+    chains: ChainBreakdown[];
 }
 
 interface Portfolio {
     totalUsd: string;
-    chains: ChainPortfolio[];
+    convertedTotals: Record<string, string>;
+    assets: Asset[];
 }
 
 export default function DashboardPage() {
@@ -37,6 +41,7 @@ export default function DashboardPage() {
     const [selectedToken, setSelectedToken] = useState<any>(null);
     const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<'tokens' | 'history'>('tokens');
+    const [selectedCurrency, setSelectedCurrency] = useState<string>('USD');
 
     useEffect(() => {
         const token = localStorage.getItem('accessToken');
@@ -83,9 +88,32 @@ export default function DashboardPage() {
         router.push('/');
     };
 
-    const openTransferModal = (asset: Balance, chain: ChainPortfolio) => {
-        setSelectedToken({ ...asset, chainId: chain.chainId, type: chain.type });
+    const openTransferModal = (asset: Asset, chain: ChainBreakdown) => {
+        setSelectedToken({ 
+            symbol: asset.symbol,
+            name: asset.name,
+            balance: chain.balance,
+            decimals: asset.decimals,
+            address: chain.address,
+            chainId: chain.chainId, 
+            type: chain.type 
+        });
         setIsTransferModalOpen(true);
+    };
+
+    const getCurrencySymbol = (currency: string) => {
+        const symbols: Record<string, string> = {
+            'USD': '$',
+            'PKR': 'Rs',
+            'EUR': '€',
+            'GBP': '£',
+            'INR': '₹',
+            'AED': 'AED',
+            'SAR': 'SAR',
+            'JPY': '¥',
+            'CNY': '¥'
+        };
+        return symbols[currency] || currency;
     };
 
     if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
@@ -126,8 +154,30 @@ export default function DashboardPage() {
                     <div className="space-y-6">
                         {/* Total Balance Card */}
                         <div className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl p-8 text-white shadow-lg">
-                            <p className="text-emerald-100 font-medium mb-1">Total Balance</p>
-                            <h2 className="text-4xl font-bold">${portfolio.totalUsd}</h2>
+                            <div className="flex justify-between items-start mb-4">
+                                <p className="text-emerald-100 font-medium">Total Balance</p>
+                                {portfolio.convertedTotals && Object.keys(portfolio.convertedTotals).length > 0 && (
+                                    <select 
+                                        value={selectedCurrency}
+                                        onChange={(e) => setSelectedCurrency(e.target.value)}
+                                        className="bg-white/20 text-white rounded-lg px-3 py-1 text-sm font-medium border border-white/30 focus:outline-none focus:ring-2 focus:ring-white/50"
+                                    >
+                                        <option value="USD">USD</option>
+                                        {Object.keys(portfolio.convertedTotals).map(currency => (
+                                            <option key={currency} value={currency}>{currency}</option>
+                                        ))}
+                                    </select>
+                                )}
+                            </div>
+                            <h2 className="text-4xl font-bold">
+                                {selectedCurrency === 'USD' 
+                                    ? `$${portfolio.totalUsd}` 
+                                    : `${getCurrencySymbol(selectedCurrency)} ${portfolio.convertedTotals[selectedCurrency]}`
+                                }
+                            </h2>
+                            {selectedCurrency !== 'USD' && (
+                                <p className="text-emerald-100 text-sm mt-2">${portfolio.totalUsd} USD</p>
+                            )}
                         </div>
 
                         {/* Tabs */}
@@ -139,7 +189,7 @@ export default function DashboardPage() {
                                     : 'border-transparent text-slate-500 hover:text-slate-700'
                                     }`}
                             >
-                                Tokens
+                                Assets
                             </button>
                             <button
                                 onClick={() => setActiveTab('history')}
@@ -155,76 +205,77 @@ export default function DashboardPage() {
                         {/* Content */}
                         {activeTab === 'tokens' ? (
                             <div className="space-y-6">
-                                {/* Chains */}
-                                {portfolio.chains.map((chain, idx) => (
+                                {/* Assets */}
+                                {portfolio.assets.map((asset, idx) => (
                                     <div key={idx} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                                        <div className="bg-slate-50 px-6 py-4 border-b border-slate-200 flex justify-between items-center">
-                                            <div className="flex items-center gap-3">
-                                                <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${chain.type === 'evm' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
-                                                    {chain.type}
-                                                </span>
-                                                <span className="font-bold text-slate-700">{chain.network || `Chain ${chain.chainId}`}</span>
-                                            </div>
-                                            <div className="flex items-center gap-2 text-sm text-slate-500 font-mono">
-                                                <span className="opacity-50 text-xs">Address:</span>
-                                                {chain.address.slice(0, 6)}...{chain.address.slice(-4)}
-                                                <button
-                                                    onClick={() => {
-                                                        navigator.clipboard.writeText(chain.address);
-                                                        const btn = document.getElementById(`copy-btn-${idx}`);
-                                                        if (btn) {
-                                                            const originalHTML = btn.innerHTML;
-                                                            btn.innerHTML = `<svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>`;
-                                                            setTimeout(() => btn.innerHTML = originalHTML, 2000);
-                                                        }
-                                                    }}
-                                                    id={`copy-btn-${idx}`}
-                                                    className="p-1 hover:bg-slate-100 rounded transition text-slate-400 hover:text-slate-600"
-                                                    title="Copy Address"
-                                                >
-                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                                                </button>
+                                        <div className="bg-slate-50 px-6 py-4 border-b border-slate-200">
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="h-12 w-12 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-full flex items-center justify-center font-bold text-white text-lg">
+                                                        {asset.symbol[0]}
+                                                    </div>
+                                                    <div>
+                                                        <h3 className="font-bold text-slate-900 text-lg">{asset.name}</h3>
+                                                        <p className="text-sm text-slate-500">{asset.symbol}</p>
+                                                    </div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="text-2xl font-bold text-slate-900">{parseFloat(asset.totalBalance).toFixed(6)}</p>
+                                                    <p className="text-sm text-slate-500">${asset.totalUsdValue} USD</p>
+                                                </div>
                                             </div>
                                         </div>
 
+                                        {/* Chain Breakdown */}
                                         <div className="divide-y divide-slate-100">
-                                            {chain.assets.map((asset, i) => (
+                                            <div className="px-6 py-2 bg-slate-25">
+                                                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Chain Breakdown</p>
+                                            </div>
+                                            {asset.chains.map((chain, i) => (
                                                 <div key={i} className="px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition">
                                                     <div className="flex items-center gap-4">
-                                                        <div className="h-10 w-10 bg-slate-100 rounded-full flex items-center justify-center font-bold text-slate-500">
-                                                            {asset.symbol[0]}
-                                                        </div>
+                                                        <span className={`px-2 py-1 rounded text-xs font-bold uppercase ${chain.type === 'evm' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                                            {chain.type}
+                                                        </span>
                                                         <div>
-                                                            <p className="font-bold text-slate-900">{asset.name}</p>
-                                                            <p className="text-xs text-slate-500">{asset.symbol}</p>
+                                                            <p className="font-semibold text-slate-900">{chain.network}</p>
+                                                            <p className="text-xs text-slate-500 font-mono">
+                                                                {chain.address === 'native' ? 'Native Token' : `${chain.address.slice(0, 6)}...${chain.address.slice(-4)}`}
+                                                            </p>
                                                         </div>
                                                     </div>
                                                     <div className="flex items-center gap-6">
                                                         <div className="text-right">
-                                                            <p className="font-bold text-slate-900">{parseFloat(asset.balance).toFixed(4)}</p>
-                                                            <p className="text-xs text-slate-500">Balance</p>
+                                                            <p className="font-bold text-slate-900">{parseFloat(chain.balance).toFixed(6)}</p>
+                                                            <p className="text-xs text-slate-500">${chain.usdValue.toFixed(2)}</p>
                                                         </div>
                                                         <button
                                                             onClick={() => openTransferModal(asset, chain)}
-                                                            className={`px-4 py-2 text-white rounded-lg text-sm font-semibold transition ${chain.type === 'evm'
-                                                                ? 'bg-slate-900 hover:bg-slate-800'
-                                                                : 'bg-purple-600 hover:bg-purple-700'
-                                                                }`}
+                                                            disabled={parseFloat(chain.balance) === 0}
+                                                            className={`px-4 py-2 text-white rounded-lg text-sm font-semibold transition ${
+                                                                parseFloat(chain.balance) === 0 
+                                                                    ? 'bg-slate-300 cursor-not-allowed'
+                                                                    : chain.type === 'evm'
+                                                                        ? 'bg-slate-900 hover:bg-slate-800'
+                                                                        : 'bg-purple-600 hover:bg-purple-700'
+                                                            }`}
                                                         >
                                                             Transfer
                                                         </button>
                                                     </div>
                                                 </div>
                                             ))}
-                                            {chain.assets.length === 0 && (
-                                                <div className="p-6 text-center text-slate-500 italic">No assets found</div>
-                                            )}
                                         </div>
                                     </div>
                                 ))}
+                                {portfolio.assets.length === 0 && (
+                                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-10 text-center text-slate-500 italic">
+                                        No assets found
+                                    </div>
+                                )}
                             </div>
                         ) : (
-                            accessToken && <TransactionHistoryList chains={portfolio.chains} accessToken={accessToken} />
+                            accessToken && <TransactionHistoryList chains={[]} accessToken={accessToken} />
                         )}
                     </div>
                 ) : (
