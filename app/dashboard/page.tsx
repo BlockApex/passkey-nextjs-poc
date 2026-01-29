@@ -160,11 +160,11 @@ export default function DashboardPage() {
                                     <select 
                                         value={selectedCurrency}
                                         onChange={(e) => setSelectedCurrency(e.target.value)}
-                                        className="bg-white/20 text-white rounded-lg px-3 py-1 text-sm font-medium border border-white/30 focus:outline-none focus:ring-2 focus:ring-white/50"
+                                        className="bg-white text-slate-900 rounded-lg px-3 py-1 text-sm font-medium border border-white/30 focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer"
                                     >
-                                        <option value="USD">USD</option>
+                                        <option value="USD" className="text-slate-900">USD</option>
                                         {Object.keys(portfolio.convertedTotals).map(currency => (
-                                            <option key={currency} value={currency}>{currency}</option>
+                                            <option key={currency} value={currency} className="text-slate-900">{currency}</option>
                                         ))}
                                     </select>
                                 )}
@@ -178,6 +178,100 @@ export default function DashboardPage() {
                             {selectedCurrency !== 'USD' && (
                                 <p className="text-emerald-100 text-sm mt-2">${portfolio.totalUsd} USD</p>
                             )}
+                        </div>
+
+                        {/* Wallet Addresses */}
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                            <h3 className="text-lg font-bold text-slate-900 mb-4">Your Wallet Addresses</h3>
+                            <div className="space-y-3">
+                                {/* EVM Wallet */}
+                                {(() => {
+                                    try {
+                                        const walletData = localStorage.getItem('wallet');
+                                        if (walletData) {
+                                            const wallet = JSON.parse(walletData);
+                                            const evmAddress = wallet?.evm?.address;
+                                            if (evmAddress) {
+                                                return (
+                                                    <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                                                        <div className="flex items-center gap-3">
+                                                            <span className="px-2 py-1 rounded text-xs font-bold uppercase bg-blue-100 text-blue-700">
+                                                                EVM
+                                                            </span>
+                                                            <code className="text-sm text-slate-600 font-mono">
+                                                                {evmAddress.slice(0, 8)}...{evmAddress.slice(-6)}
+                                                            </code>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => {
+                                                                navigator.clipboard.writeText(evmAddress);
+                                                                const btn = document.getElementById('evm-copy-btn');
+                                                                if (btn) {
+                                                                    const originalHTML = btn.innerHTML;
+                                                                    btn.innerHTML = '<svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
+                                                                    setTimeout(() => btn.innerHTML = originalHTML, 2000);
+                                                                }
+                                                            }}
+                                                            id="evm-copy-btn"
+                                                            className="p-2 hover:bg-slate-200 rounded transition text-slate-500 hover:text-slate-700"
+                                                            title="Copy EVM Address"
+                                                        >
+                                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                                                        </button>
+                                                    </div>
+                                                );
+                                            }
+                                        }
+                                    } catch (e) {
+                                        console.error('Error parsing wallet data:', e);
+                                    }
+                                    return null;
+                                })()}
+                                
+                                {/* SVM Wallet */}
+                                {(() => {
+                                    try {
+                                        const walletData = localStorage.getItem('wallet');
+                                        if (walletData) {
+                                            const wallet = JSON.parse(walletData);
+                                            const svmAddress = wallet?.svm?.address;
+                                            if (svmAddress) {
+                                                return (
+                                                    <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                                                        <div className="flex items-center gap-3">
+                                                            <span className="px-2 py-1 rounded text-xs font-bold uppercase bg-purple-100 text-purple-700">
+                                                                SVM
+                                                            </span>
+                                                            <code className="text-sm text-slate-600 font-mono">
+                                                                {svmAddress.slice(0, 8)}...{svmAddress.slice(-6)}
+                                                            </code>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => {
+                                                                navigator.clipboard.writeText(svmAddress);
+                                                                const btn = document.getElementById('svm-copy-btn');
+                                                                if (btn) {
+                                                                    const originalHTML = btn.innerHTML;
+                                                                    btn.innerHTML = '<svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
+                                                                    setTimeout(() => btn.innerHTML = originalHTML, 2000);
+                                                                }
+                                                            }}
+                                                            id="svm-copy-btn"
+                                                            className="p-2 hover:bg-slate-200 rounded transition text-slate-500 hover:text-slate-700"
+                                                            title="Copy SVM Address"
+                                                        >
+                                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                                                        </button>
+                                                    </div>
+                                                );
+                                            }
+                                        }
+                                    } catch (e) {
+                                        console.error('Error parsing wallet data:', e);
+                                    }
+                                    return null;
+                                })()}
+                            </div>
                         </div>
 
                         {/* Tabs */}
