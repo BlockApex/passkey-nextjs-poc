@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import TransferModal from './components/TransferModal';
+import OfframpModal from './components/OfframpModal';
 import TransactionHistoryList from './components/TransactionHistoryList';
 
 interface ChainBreakdown {
@@ -40,6 +41,8 @@ export default function DashboardPage() {
 
     const [selectedToken, setSelectedToken] = useState<any>(null);
     const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+    const [selectedOfframpToken, setSelectedOfframpToken] = useState<any>(null);
+    const [isOfframpModalOpen, setIsOfframpModalOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<'tokens' | 'history'>('tokens');
     const [selectedCurrency, setSelectedCurrency] = useState<string>('USD');
 
@@ -343,19 +346,44 @@ export default function DashboardPage() {
                                                             <p className="font-bold text-slate-900">{parseFloat(chain.balance).toFixed(6)}</p>
                                                             <p className="text-xs text-slate-500">${chain.usdValue.toFixed(2)}</p>
                                                         </div>
-                                                        <button
-                                                            onClick={() => openTransferModal(asset, chain)}
-                                                            disabled={parseFloat(chain.balance) === 0}
-                                                            className={`px-4 py-2 text-white rounded-lg text-sm font-semibold transition ${
-                                                                parseFloat(chain.balance) === 0 
-                                                                    ? 'bg-slate-300 cursor-not-allowed'
-                                                                    : chain.type === 'evm'
-                                                                        ? 'bg-slate-900 hover:bg-slate-800'
-                                                                        : 'bg-purple-600 hover:bg-purple-700'
-                                                            }`}
-                                                        >
-                                                            Transfer
-                                                        </button>
+                                                        <div className="flex items-center gap-2">
+                                                            <button
+                                                                onClick={() => openTransferModal(asset, chain)}
+                                                                disabled={parseFloat(chain.balance) === 0}
+                                                                className={`px-4 py-2 text-white rounded-lg text-sm font-semibold transition ${
+                                                                    parseFloat(chain.balance) === 0 
+                                                                        ? 'bg-slate-300 cursor-not-allowed'
+                                                                        : chain.type === 'evm'
+                                                                            ? 'bg-slate-900 hover:bg-slate-800'
+                                                                            : 'bg-purple-600 hover:bg-purple-700'
+                                                                }`}
+                                                            >
+                                                                Transfer
+                                                            </button>
+                                                            {['USDC', 'USDT'].includes(asset.symbol.toUpperCase()) && (
+                                                                <button
+                                                                    onClick={() => {
+                                                                        setSelectedOfframpToken({
+                                                                            symbol: asset.symbol,
+                                                                            name: asset.name,
+                                                                            balance: chain.balance,
+                                                                            address: chain.address,
+                                                                            chainId: chain.chainId,
+                                                                            type: chain.type,
+                                                                        });
+                                                                        setIsOfframpModalOpen(true);
+                                                                    }}
+                                                                    disabled={parseFloat(chain.balance) === 0}
+                                                                    className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+                                                                        parseFloat(chain.balance) === 0
+                                                                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                                                            : 'bg-amber-500 hover:bg-amber-600 text-white'
+                                                                    }`}
+                                                                >
+                                                                    Off-Ramp
+                                                                </button>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 </div>
                                             ))}
@@ -381,6 +409,13 @@ export default function DashboardPage() {
                 isOpen={isTransferModalOpen}
                 onClose={() => setIsTransferModalOpen(false)}
                 token={selectedToken}
+                accessToken={localStorage.getItem('accessToken') || ''}
+            />
+
+            <OfframpModal
+                isOpen={isOfframpModalOpen}
+                onClose={() => setIsOfframpModalOpen(false)}
+                token={selectedOfframpToken}
                 accessToken={localStorage.getItem('accessToken') || ''}
             />
         </div>

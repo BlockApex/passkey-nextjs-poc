@@ -18,6 +18,7 @@ interface UseLazorkitCustomSignerProps {
         x: string;
         y: string;
     };
+    paymasterUrl?: string;
     authenticatorData?: string;
     clientDataJSON?: string;
     signature?: string;
@@ -56,8 +57,10 @@ export function useLazorkitCustomSigner() {
             const readConnection = new Connection(connection.rpcEndpoint, 'processed');
             const lazorkitClient = new LazorkitClient(readConnection);
 
+            const paymasterUrl = config.paymasterUrl || process.env.NEXT_PUBLIC_LAZORKIT_PAYMASTER_URL || 'https://kora.devnet.lazorkit.com';
+            console.log('[LazorKit] Using Paymaster URL:', paymasterUrl);
             const paymaster = new Paymaster({
-                paymasterUrl: process.env.NEXT_PUBLIC_LAZORKIT_PAYMASTER_URL || 'https://kora.devnet.lazorkit.com'
+                paymasterUrl
             });
 
             // Helper: Convert Base64Url (RFC 4648) to Standard Base64
@@ -101,6 +104,17 @@ export function useLazorkitCustomSigner() {
 
             if (!walletInfo) {
                 console.log("Smart Wallet not found. Initializing new wallet...");
+
+                // Debug: Check paymaster payer balance
+                try {
+                    const payerBalance = await connection.getBalance(payer);
+                    console.log(`[LazorKit] Paymaster payer: ${payer.toBase58()}, balance: ${payerBalance / 1e9} SOL`);
+                    if (payerBalance === 0) {
+                        console.error('[LazorKit] WARNING: Paymaster payer has 0 SOL! Wallet creation will fail.');
+                    }
+                } catch (balErr) {
+                    console.warn('[LazorKit] Failed to check payer balance:', balErr);
+                }
 
                 // Derive Wallet ID deterministically (SHA-256 first 8 bytes)
                 // This matches backend logic in WalletService.deriveSVMAddress

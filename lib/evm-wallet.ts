@@ -1,9 +1,29 @@
 import { toPasskeyValidator, PasskeyValidatorContractVersion } from "@zerodev/passkey-validator"
 import { createKernelAccount } from "@zerodev/sdk"
 import { getEntryPoint, KERNEL_V3_1 } from "@zerodev/sdk/constants"
-import { createPublicClient, http, keccak256, toHex } from "viem"
-import { sepolia } from "viem/chains"
+import { createPublicClient, http, keccak256, toHex, type Chain } from "viem"
+import * as viemChains from "viem/chains"
 import type { WebAuthnKey } from "@zerodev/webauthn-key"
+
+/**
+ * Resolve a viem Chain object from a numeric chainId.
+ */
+function getViemChain(chainId: number): Chain {
+    const allChains = Object.values(viemChains)
+    const chain = allChains.find(
+        (c: any) => c?.id === chainId
+    ) as Chain | undefined
+    if (!chain) {
+        console.warn(`No built-in viem chain for chainId ${chainId}, using custom definition`)
+        return {
+            id: chainId,
+            name: `Chain ${chainId}`,
+            nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+            rpcUrls: { default: { http: [] } },
+        } as Chain
+    }
+    return chain
+}
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1'
 
@@ -42,10 +62,10 @@ export async function createEVMWallet(
         throw new Error('No primary EVM chain configuration found')
     }
 
-    // 2. Create public client
+    // 2. Create public client with dynamic chain resolution
     const publicClient = createPublicClient({
         transport: http(evmChain.evm.rpcUrl),
-        chain: sepolia, // TODO: Make dynamic based on chainId
+        chain: getViemChain(evmChain.evm.chainId),
     })
 
 

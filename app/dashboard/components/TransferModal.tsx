@@ -145,7 +145,8 @@ export default function TransferModal({ isOpen, onClose, token, accessToken }: T
                     passkeyPublicKey: {
                         x: config.pubX,
                         y: config.pubY
-                    }
+                    },
+                    paymasterUrl: config.lazorkit?.paymasterUrl
                 });
 
                 setStatus('Transaction Submitted! Confirming...');
