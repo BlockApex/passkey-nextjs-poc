@@ -17,8 +17,9 @@ export default function PasskeyRegistrationPage() {
     const [loading, setLoading] = useState(false);
     const [accessToken, setAccessToken] = useState('');
     const [userId, setUserId] = useState('');
-    const [evmWallet, setEvmWallet] = useState('');
-    const [svmWallet, setSvmWallet] = useState('');
+    const [spotEvmWallet, setSpotEvmWallet] = useState('');
+    const [spotSvmWallet, setSpotSvmWallet] = useState('');
+    const [moneyEvmWallet, setMoneyEvmWallet] = useState('');
 
     // Registration flow
     const handleRegister = async () => {
@@ -84,19 +85,18 @@ export default function PasskeyRegistrationPage() {
             setUserId(result.user.id);
 
             // Step 4: Display Backend-Created Wallets
-            if (result.wallet) {
-                if (result.wallet.evm) setEvmWallet(result.wallet.evm.address);
-                if (result.wallet.svm) setSvmWallet(result.wallet.svm.address);
-                console.log('Wallets received from backend:', result.wallet);
-            } else {
-                console.warn('No wallet data received from backend registration.');
+            if (result.wallets) {
+                if (result.wallets.spot?.evm) setSpotEvmWallet(result.wallets.spot.evm.address);
+                if (result.wallets.spot?.svm) setSpotSvmWallet(result.wallets.spot.svm.address);
+                if (result.wallets.money?.evm) setMoneyEvmWallet(result.wallets.money.evm.address);
+                console.log('Wallets received from backend:', result.wallets);
             }
 
             setStep('success');
             localStorage.setItem('accessToken', result.accessToken);
             localStorage.setItem('username', result.user.username);
-            if (result.wallet) {
-                localStorage.setItem('wallet', JSON.stringify(result.wallet));
+            if (result.wallets) {
+                localStorage.setItem('wallets', JSON.stringify(result.wallets));
             }
             if (result.credentialId) {
                 localStorage.setItem('credentialId', result.credentialId);
@@ -174,19 +174,18 @@ export default function PasskeyRegistrationPage() {
             setUserId(result.user.id);
 
             // Step 4: Display Backend-Retrieved Wallets
-            if (result.wallet) {
-                if (result.wallet.evm) setEvmWallet(result.wallet.evm.address);
-                if (result.wallet.svm) setSvmWallet(result.wallet.svm.address);
-                console.log('Wallets received from backend:', result.wallet);
-            } else {
-                console.warn('No wallet data received from backend login.');
+            if (result.wallets) {
+                if (result.wallets.spot?.evm) setSpotEvmWallet(result.wallets.spot.evm.address);
+                if (result.wallets.spot?.svm) setSpotSvmWallet(result.wallets.spot.svm.address);
+                if (result.wallets.money?.evm) setMoneyEvmWallet(result.wallets.money.evm.address);
+                console.log('Wallets received from backend:', result.wallets);
             }
 
             setStep('success');
             localStorage.setItem('accessToken', result.accessToken);
             localStorage.setItem('username', result.user.username);
-            if (result.wallet) {
-                localStorage.setItem('wallet', JSON.stringify(result.wallet));
+            if (result.wallets) {
+                localStorage.setItem('wallets', JSON.stringify(result.wallets));
             }
             if (result.credentialId) {
                 localStorage.setItem('credentialId', result.credentialId);
@@ -303,19 +302,37 @@ export default function PasskeyRegistrationPage() {
                                 <p className="text-white mb-2">
                                     <strong>Username:</strong> {username}
                                 </p>
-                                <p className="text-white mb-2">
+                                <p className="text-white mb-4">
                                     <strong>User ID:</strong> {userId}
                                 </p>
-                                {evmWallet && (
-                                    <p className="text-white mb-2">
-                                        <strong>EVM Wallet:</strong> <span className="text-xs break-all">{evmWallet}</span>
-                                    </p>
+                                
+                                {/* Spot Wallet */}
+                                <div className="mb-4 p-4 bg-white/10 rounded-lg">
+                                    <h3 className="text-lg font-semibold text-purple-300 mb-2">💰 Spot Wallet</h3>
+                                    <p className="text-gray-300 text-xs mb-2">All your assets: volatile + stablecoins across EVM &amp; SVM chains</p>
+                                    {spotEvmWallet && (
+                                        <p className="text-white mb-1">
+                                            <strong className="text-blue-300">EVM:</strong> <span className="text-xs break-all font-mono">{spotEvmWallet}</span>
+                                        </p>
+                                    )}
+                                    {spotSvmWallet && spotSvmWallet !== 'SVM_PLACEHOLDER' && (
+                                        <p className="text-white">
+                                            <strong className="text-green-300">SVM:</strong> <span className="text-xs break-all font-mono">{spotSvmWallet}</span>
+                                        </p>
+                                    )}
+                                </div>
+
+                                {/* Money Wallet */}
+                                {moneyEvmWallet && (
+                                    <div className="mb-4 p-4 bg-white/10 rounded-lg">
+                                        <h3 className="text-lg font-semibold text-emerald-300 mb-2">🏦 Money Wallet</h3>
+                                        <p className="text-gray-300 text-xs mb-2">Spendable stables — USDT0 on Plasma</p>
+                                        <p className="text-white">
+                                            <strong className="text-blue-300">EVM:</strong> <span className="text-xs break-all font-mono">{moneyEvmWallet}</span>
+                                        </p>
+                                    </div>
                                 )}
-                                {svmWallet && svmWallet !== 'SVM_PLACEHOLDER' && (
-                                    <p className="text-white mb-2">
-                                        <strong>SVM Wallet:</strong> <span className="text-xs break-all">{svmWallet}</span>
-                                    </p>
-                                )}
+
                                 <p className="text-xs text-gray-300 mt-4 break-all">
                                     Access Token: {accessToken.substring(0, 50)}...
                                 </p>
@@ -326,8 +343,9 @@ export default function PasskeyRegistrationPage() {
                                     setReservationToken('');
                                     setUsername('');
                                     setAccessToken('');
-                                    setEvmWallet('');
-                                    setSvmWallet('');
+                                    setSpotEvmWallet('');
+                                    setSpotSvmWallet('');
+                                    setMoneyEvmWallet('');
                                     setError('');
                                     localStorage.removeItem('accessToken');
                                     localStorage.removeItem('username');

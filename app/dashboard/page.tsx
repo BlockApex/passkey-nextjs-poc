@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import TransferModal from './components/TransferModal';
 import OfframpModal from './components/OfframpModal';
@@ -31,9 +31,18 @@ interface Portfolio {
     assets: Asset[];
 }
 
+interface WalletAddresses {
+    spotEvm: string | null;
+    spotSvm: string | null;
+    moneyEvm: string | null;
+}
+
+type ActiveWallet = 'spot' | 'money';
+
 export default function DashboardPage() {
     const router = useRouter();
-    const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
+    const [spotPortfolio, setSpotPortfolio] = useState<Portfolio | null>(null);
+    const [moneyPortfolio, setMoneyPortfolio] = useState<Portfolio | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [username, setUsername] = useState<string | null>(null);
@@ -45,6 +54,25 @@ export default function DashboardPage() {
     const [isOfframpModalOpen, setIsOfframpModalOpen] = useState(false);
     const [activeTab, setActiveTab] = useState<'tokens' | 'history'>('tokens');
     const [selectedCurrency, setSelectedCurrency] = useState<string>('USD');
+    const [activeWallet, setActiveWallet] = useState<ActiveWallet>('spot');
+
+    // Parse wallet addresses from localStorage
+    const walletAddresses = useMemo<WalletAddresses>(() => {
+        try {
+            const walletsData = localStorage.getItem('wallets');
+            if (walletsData) {
+                const wallets = JSON.parse(walletsData);
+                return {
+                    spotEvm: wallets?.spot?.evm?.address || null,
+                    spotSvm: wallets?.spot?.svm?.address || null,
+                    moneyEvm: wallets?.money?.evm?.address || null,
+                };
+            }
+        } catch (e) {
+            console.error('Error parsing wallet data:', e);
+        }
+        return { spotEvm: null, spotSvm: null, moneyEvm: null };
+    }, []);
 
     useEffect(() => {
         const token = localStorage.getItem('accessToken');
@@ -56,28 +84,31 @@ export default function DashboardPage() {
             return;
         }
         setAccessToken(token);
-
-        fetchBalances(token);
+        fetchAllBalances(token);
     }, []);
 
-    const fetchBalances = async (token: string) => {
+    const fetchAllBalances = async (token: string) => {
+        setLoading(true);
         try {
             const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
-            const res = await fetch(`${apiUrl}/transactions/balances`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
 
-            if (res.status === 401) {
+            const [spotRes, moneyRes] = await Promise.all([
+                fetch(`${apiUrl}/transactions/balances?walletType=spot`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                }),
+                fetch(`${apiUrl}/transactions/balances?walletType=money`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                }),
+            ]);
+
+            if (spotRes.status === 401 || moneyRes.status === 401) {
                 localStorage.removeItem('accessToken');
                 router.push('/');
                 return;
             }
 
-            if (!res.ok) throw new Error('Failed to fetch balances');
-            const data = await res.json();
-            setPortfolio(data);
+            if (spotRes.ok) setSpotPortfolio(await spotRes.json());
+            if (moneyRes.ok) setMoneyPortfolio(await moneyRes.json());
         } catch (err: any) {
             setError(err.message);
         } finally {
@@ -88,43 +119,97 @@ export default function DashboardPage() {
     const handleLogout = () => {
         localStorage.removeItem('accessToken');
         localStorage.removeItem('username');
+        localStorage.removeItem('wallets');
         router.push('/');
     };
 
     const openTransferModal = (asset: Asset, chain: ChainBreakdown) => {
-        setSelectedToken({ 
+        setSelectedToken({
             symbol: asset.symbol,
             name: asset.name,
             balance: chain.balance,
             decimals: asset.decimals,
             address: chain.address,
-            chainId: chain.chainId, 
-            type: chain.type 
+            chainId: chain.chainId,
+            type: chain.type
         });
         setIsTransferModalOpen(true);
     };
 
     const getCurrencySymbol = (currency: string) => {
         const symbols: Record<string, string> = {
-            'USD': '$',
-            'PKR': 'Rs',
-            'EUR': '€',
-            'GBP': '£',
-            'INR': '₹',
-            'AED': 'AED',
-            'SAR': 'SAR',
-            'JPY': '¥',
-            'CNY': '¥'
+            'USD': '$', 'PKR': 'Rs', 'EUR': '€', 'GBP': '£',
+            'INR': '₹', 'AED': 'AED', 'SAR': 'SAR', 'JPY': '¥', 'CNY': '¥'
         };
         return symbols[currency] || currency;
     };
 
+    // Copy button component
+    const CopyButton = ({ address, id }: { address: string; id: string }) => (
+        <button
+            onClick={() => {
+                navigator.clipboard.writeText(address);
+                const btn = document.getElementById(id);
+                if (btn) {
+                    const orig = btn.innerHTML;
+                    btn.innerHTML = '<svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
+                    setTimeout(() => btn.innerHTML = orig, 2000);
+                }
+            }}
+            id={id}
+            className="p-2 hover:bg-slate-200 rounded transition text-slate-500 hover:text-slate-700"
+            title="Copy address"
+        >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+        </button>
+    );
+
+    // Build history chains from active wallet's addresses
+    // NOTE: Must be before any early returns to satisfy Rules of Hooks
+    const historyChains = useMemo(() => {
+        const chains: any[] = [];
+        if (activeWallet === 'spot') {
+            if (walletAddresses.spotEvm) {
+                chains.push({ chainId: 11155111, type: 'evm' as const, address: walletAddresses.spotEvm, assets: [] });
+            }
+            if (walletAddresses.spotSvm) {
+                chains.push({ chainId: 0, type: 'svm' as const, address: walletAddresses.spotSvm, network: 'devnet', assets: [] });
+            }
+        } else {
+            if (walletAddresses.moneyEvm) {
+                chains.push({ chainId: 9745, type: 'evm' as const, address: walletAddresses.moneyEvm, assets: [] });
+            }
+        }
+        return chains;
+    }, [activeWallet, walletAddresses]);
+
     if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+
+    const walletConfig = {
+        spot: {
+            label: '💰 Spot Wallet',
+            subtitle: 'All assets across EVM & SVM chains',
+            gradient: 'from-purple-600 to-indigo-600',
+            accentBorder: 'border-purple-500',
+            tabActive: 'border-purple-600 text-purple-600',
+        },
+        money: {
+            label: '🏦 Money Wallet',
+            subtitle: 'Spendable stables — USDT0 on Plasma',
+            gradient: 'from-emerald-600 to-teal-600',
+            accentBorder: 'border-emerald-500',
+            tabActive: 'border-emerald-600 text-emerald-600',
+        }
+    };
+
+    const cfg = walletConfig[activeWallet];
+    const currentPortfolio = activeWallet === 'spot' ? spotPortfolio : moneyPortfolio;
 
     return (
         <div className="min-h-screen bg-slate-50 p-6">
             <div className="max-w-4xl mx-auto">
-                <div className="flex justify-between items-center mb-8">
+                {/* Header */}
+                <div className="flex justify-between items-center mb-6">
                     <div>
                         <h1 className="text-3xl font-bold text-slate-900">My Wallets</h1>
                         {username && <p className="text-slate-500">Welcome back, @{username}</p>}
@@ -134,7 +219,7 @@ export default function DashboardPage() {
                             onClick={() => {
                                 setLoading(true);
                                 const token = localStorage.getItem('accessToken');
-                                if (token) fetchBalances(token);
+                                if (token) fetchAllBalances(token);
                             }}
                             disabled={loading}
                             className="text-emerald-600 hover:text-emerald-700 font-medium flex items-center gap-2 disabled:opacity-50"
@@ -151,164 +236,154 @@ export default function DashboardPage() {
                     </div>
                 </div>
 
-                {error && <div className="bg-red-50 text-red-600 p-4 rounded-lg mb-6">{error}</div>}
-
-                {portfolio ? (
-                    <div className="space-y-6">
-                        {/* Total Balance Card */}
-                        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl p-8 text-white shadow-lg">
-                            <div className="flex justify-between items-start mb-4">
-                                <p className="text-emerald-100 font-medium">Total Balance</p>
-                                {portfolio.convertedTotals && Object.keys(portfolio.convertedTotals).length > 0 && (
-                                    <select 
-                                        value={selectedCurrency}
-                                        onChange={(e) => setSelectedCurrency(e.target.value)}
-                                        className="bg-white text-slate-900 rounded-lg px-3 py-1 text-sm font-medium border border-white/30 focus:outline-none focus:ring-2 focus:ring-emerald-400 cursor-pointer"
-                                    >
-                                        <option value="USD" className="text-slate-900">USD</option>
-                                        {Object.keys(portfolio.convertedTotals).map(currency => (
-                                            <option key={currency} value={currency} className="text-slate-900">{currency}</option>
-                                        ))}
-                                    </select>
-                                )}
+                {/* Wallet Switcher */}
+                <div className="flex gap-3 mb-6">
+                    <button
+                        onClick={() => { setActiveWallet('spot'); setActiveTab('tokens'); }}
+                        className={`flex-1 px-5 py-4 rounded-xl font-semibold text-left transition-all border-2 ${
+                            activeWallet === 'spot'
+                                ? 'border-purple-500 bg-purple-50 text-purple-800 shadow-sm'
+                                : 'border-slate-200 bg-white text-slate-600 hover:border-purple-300 hover:bg-purple-50/50'
+                        }`}
+                    >
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <span className="text-lg">💰</span>
+                                <span className="ml-2 font-bold">Spot Wallet</span>
+                                <p className="text-xs mt-1 opacity-70">All assets</p>
                             </div>
-                            <h2 className="text-4xl font-bold">
-                                {selectedCurrency === 'USD' 
-                                    ? `$${portfolio.totalUsd}` 
-                                    : `${getCurrencySymbol(selectedCurrency)} ${portfolio.convertedTotals[selectedCurrency]}`
-                                }
-                            </h2>
-                            {selectedCurrency !== 'USD' && (
-                                <p className="text-emerald-100 text-sm mt-2">${portfolio.totalUsd} USD</p>
+                            {spotPortfolio && (
+                                <span className="text-lg font-bold">${spotPortfolio.totalUsd}</span>
                             )}
                         </div>
-
-                        {/* Wallet Addresses */}
-                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                            <h3 className="text-lg font-bold text-slate-900 mb-4">Your Wallet Addresses</h3>
-                            <div className="space-y-3">
-                                {/* EVM Wallet */}
-                                {(() => {
-                                    try {
-                                        const walletData = localStorage.getItem('wallet');
-                                        if (walletData) {
-                                            const wallet = JSON.parse(walletData);
-                                            const evmAddress = wallet?.evm?.address;
-                                            if (evmAddress) {
-                                                return (
-                                                    <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                                                        <div className="flex items-center gap-3">
-                                                            <span className="px-2 py-1 rounded text-xs font-bold uppercase bg-blue-100 text-blue-700">
-                                                                EVM
-                                                            </span>
-                                                            <code className="text-sm text-slate-600 font-mono">
-                                                                {evmAddress.slice(0, 8)}...{evmAddress.slice(-6)}
-                                                            </code>
-                                                        </div>
-                                                        <button
-                                                            onClick={() => {
-                                                                navigator.clipboard.writeText(evmAddress);
-                                                                const btn = document.getElementById('evm-copy-btn');
-                                                                if (btn) {
-                                                                    const originalHTML = btn.innerHTML;
-                                                                    btn.innerHTML = '<svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
-                                                                    setTimeout(() => btn.innerHTML = originalHTML, 2000);
-                                                                }
-                                                            }}
-                                                            id="evm-copy-btn"
-                                                            className="p-2 hover:bg-slate-200 rounded transition text-slate-500 hover:text-slate-700"
-                                                            title="Copy EVM Address"
-                                                        >
-                                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                                                        </button>
-                                                    </div>
-                                                );
-                                            }
-                                        }
-                                    } catch (e) {
-                                        console.error('Error parsing wallet data:', e);
-                                    }
-                                    return null;
-                                })()}
-                                
-                                {/* SVM Wallet */}
-                                {(() => {
-                                    try {
-                                        const walletData = localStorage.getItem('wallet');
-                                        if (walletData) {
-                                            const wallet = JSON.parse(walletData);
-                                            const svmAddress = wallet?.svm?.address;
-                                            if (svmAddress) {
-                                                return (
-                                                    <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                                                        <div className="flex items-center gap-3">
-                                                            <span className="px-2 py-1 rounded text-xs font-bold uppercase bg-purple-100 text-purple-700">
-                                                                SVM
-                                                            </span>
-                                                            <code className="text-sm text-slate-600 font-mono">
-                                                                {svmAddress.slice(0, 8)}...{svmAddress.slice(-6)}
-                                                            </code>
-                                                        </div>
-                                                        <button
-                                                            onClick={() => {
-                                                                navigator.clipboard.writeText(svmAddress);
-                                                                const btn = document.getElementById('svm-copy-btn');
-                                                                if (btn) {
-                                                                    const originalHTML = btn.innerHTML;
-                                                                    btn.innerHTML = '<svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
-                                                                    setTimeout(() => btn.innerHTML = originalHTML, 2000);
-                                                                }
-                                                            }}
-                                                            id="svm-copy-btn"
-                                                            className="p-2 hover:bg-slate-200 rounded transition text-slate-500 hover:text-slate-700"
-                                                            title="Copy SVM Address"
-                                                        >
-                                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                                                        </button>
-                                                    </div>
-                                                );
-                                            }
-                                        }
-                                    } catch (e) {
-                                        console.error('Error parsing wallet data:', e);
-                                    }
-                                    return null;
-                                })()}
+                    </button>
+                    <button
+                        onClick={() => { setActiveWallet('money'); setActiveTab('tokens'); }}
+                        className={`flex-1 px-5 py-4 rounded-xl font-semibold text-left transition-all border-2 ${
+                            activeWallet === 'money'
+                                ? 'border-emerald-500 bg-emerald-50 text-emerald-800 shadow-sm'
+                                : 'border-slate-200 bg-white text-slate-600 hover:border-emerald-300 hover:bg-emerald-50/50'
+                        }`}
+                    >
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <span className="text-lg">🏦</span>
+                                <span className="ml-2 font-bold">Money Wallet</span>
+                                <p className="text-xs mt-1 opacity-70">Spendable stables</p>
                             </div>
+                            {moneyPortfolio && (
+                                <span className="text-lg font-bold">${moneyPortfolio.totalUsd}</span>
+                            )}
                         </div>
+                    </button>
+                </div>
 
-                        {/* Tabs */}
-                        <div className="flex border-b border-slate-200 mb-6">
-                            <button
-                                onClick={() => setActiveTab('tokens')}
-                                className={`px-6 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'tokens'
-                                    ? 'border-emerald-600 text-emerald-600'
-                                    : 'border-transparent text-slate-500 hover:text-slate-700'
-                                    }`}
-                            >
-                                Assets
-                            </button>
-                            <button
-                                onClick={() => setActiveTab('history')}
-                                className={`px-6 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'history'
-                                    ? 'border-emerald-600 text-emerald-600'
-                                    : 'border-transparent text-slate-500 hover:text-slate-700'
-                                    }`}
-                            >
-                                History
-                            </button>
+                {error && <div className="bg-red-50 text-red-600 p-4 rounded-lg mb-6">{error}</div>}
+
+                {/* Active Wallet Content */}
+                <div className="space-y-6">
+                    {/* Balance Card */}
+                    <div className={`bg-gradient-to-r ${cfg.gradient} rounded-2xl p-8 text-white shadow-lg`}>
+                        <div className="flex justify-between items-start mb-2">
+                            <div>
+                                <p className="text-white/80 font-medium text-sm">{cfg.label}</p>
+                                <p className="text-white/60 text-xs">{cfg.subtitle}</p>
+                            </div>
+                            {currentPortfolio?.convertedTotals && Object.keys(currentPortfolio.convertedTotals).length > 0 && (
+                                <select
+                                    value={selectedCurrency}
+                                    onChange={(e) => setSelectedCurrency(e.target.value)}
+                                    className="bg-white text-slate-900 rounded-lg px-3 py-1 text-sm font-medium border border-white/30 focus:outline-none focus:ring-2 focus:ring-white/40 cursor-pointer"
+                                >
+                                    <option value="USD">USD</option>
+                                    {Object.keys(currentPortfolio.convertedTotals).map(currency => (
+                                        <option key={currency} value={currency}>{currency}</option>
+                                    ))}
+                                </select>
+                            )}
                         </div>
+                        <h2 className="text-4xl font-bold mt-3">
+                            {selectedCurrency === 'USD'
+                                ? `$${currentPortfolio?.totalUsd || '0.00'}`
+                                : `${getCurrencySymbol(selectedCurrency)} ${currentPortfolio?.convertedTotals?.[selectedCurrency] || '0.00'}`
+                            }
+                        </h2>
+                    </div>
 
-                        {/* Content */}
-                        {activeTab === 'tokens' ? (
-                            <div className="space-y-6">
-                                {/* Assets */}
-                                {portfolio.assets.map((asset, idx) => (
+                    {/* Addresses */}
+                    <div className={`bg-white rounded-xl shadow-sm border ${cfg.accentBorder} border-opacity-30 p-5`}>
+                        <h3 className="text-sm font-bold text-slate-700 mb-3 uppercase tracking-wide">Addresses</h3>
+                        <div className="space-y-2">
+                            {activeWallet === 'spot' ? (
+                                <>
+                                    {walletAddresses.spotEvm && (
+                                        <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                                            <div className="flex items-center gap-3">
+                                                <span className="px-2 py-1 rounded text-xs font-bold uppercase bg-blue-100 text-blue-700">EVM</span>
+                                                <code className="text-sm text-slate-600 font-mono">{walletAddresses.spotEvm.slice(0, 8)}...{walletAddresses.spotEvm.slice(-6)}</code>
+                                            </div>
+                                            <CopyButton address={walletAddresses.spotEvm} id="spot-evm-copy" />
+                                        </div>
+                                    )}
+                                    {walletAddresses.spotSvm && (
+                                        <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                                            <div className="flex items-center gap-3">
+                                                <span className="px-2 py-1 rounded text-xs font-bold uppercase bg-purple-100 text-purple-700">SVM</span>
+                                                <code className="text-sm text-slate-600 font-mono">{walletAddresses.spotSvm.slice(0, 8)}...{walletAddresses.spotSvm.slice(-6)}</code>
+                                            </div>
+                                            <CopyButton address={walletAddresses.spotSvm} id="spot-svm-copy" />
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                <>
+                                    {walletAddresses.moneyEvm && (
+                                        <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                                            <div className="flex items-center gap-3">
+                                                <span className="px-2 py-1 rounded text-xs font-bold uppercase bg-emerald-100 text-emerald-700">EVM</span>
+                                                <code className="text-sm text-slate-600 font-mono">{walletAddresses.moneyEvm.slice(0, 8)}...{walletAddresses.moneyEvm.slice(-6)}</code>
+                                            </div>
+                                            <CopyButton address={walletAddresses.moneyEvm} id="money-evm-copy" />
+                                        </div>
+                                    )}
+                                    <p className="text-xs text-slate-400 italic px-3">Plasma network · USDT0 target</p>
+                                </>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Assets / History Tabs */}
+                    <div className="flex border-b border-slate-200 mb-0">
+                        <button
+                            onClick={() => setActiveTab('tokens')}
+                            className={`px-6 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'tokens'
+                                ? cfg.tabActive
+                                : 'border-transparent text-slate-500 hover:text-slate-700'
+                            }`}
+                        >
+                            Assets
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('history')}
+                            className={`px-6 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'history'
+                                ? cfg.tabActive
+                                : 'border-transparent text-slate-500 hover:text-slate-700'
+                            }`}
+                        >
+                            History
+                        </button>
+                    </div>
+
+                    {/* Tab Content */}
+                    {activeTab === 'tokens' ? (
+                        <div className="space-y-6">
+                            {currentPortfolio && currentPortfolio.assets.length > 0 ? (
+                                currentPortfolio.assets.map((asset, idx) => (
                                     <div key={idx} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                                         <div className="bg-slate-50 px-6 py-4 border-b border-slate-200">
                                             <div className="flex items-center justify-between">
                                                 <div className="flex items-center gap-4">
-                                                    <div className="h-12 w-12 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-full flex items-center justify-center font-bold text-white text-lg">
+                                                    <div className={`h-12 w-12 bg-gradient-to-br ${cfg.gradient} rounded-full flex items-center justify-center font-bold text-white text-lg`}>
                                                         {asset.symbol[0]}
                                                     </div>
                                                     <div>
@@ -325,7 +400,7 @@ export default function DashboardPage() {
 
                                         {/* Chain Breakdown */}
                                         <div className="divide-y divide-slate-100">
-                                            <div className="px-6 py-2 bg-slate-25">
+                                            <div className="px-6 py-2">
                                                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Chain Breakdown</p>
                                             </div>
                                             {asset.chains.map((chain, i) => (
@@ -351,7 +426,7 @@ export default function DashboardPage() {
                                                                 onClick={() => openTransferModal(asset, chain)}
                                                                 disabled={parseFloat(chain.balance) === 0}
                                                                 className={`px-4 py-2 text-white rounded-lg text-sm font-semibold transition ${
-                                                                    parseFloat(chain.balance) === 0 
+                                                                    parseFloat(chain.balance) === 0
                                                                         ? 'bg-slate-300 cursor-not-allowed'
                                                                         : chain.type === 'evm'
                                                                             ? 'bg-slate-900 hover:bg-slate-800'
@@ -389,20 +464,23 @@ export default function DashboardPage() {
                                             ))}
                                         </div>
                                     </div>
-                                ))}
-                                {portfolio.assets.length === 0 && (
-                                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-10 text-center text-slate-500 italic">
-                                        No assets found
-                                    </div>
-                                )}
-                            </div>
-                        ) : (
-                            accessToken && <TransactionHistoryList chains={[]} accessToken={accessToken} />
-                        )}
-                    </div>
-                ) : (
-                    <div className="text-center p-10">No portfolio data found.</div>
-                )}
+                                ))
+                            ) : (
+                                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-10 text-center text-slate-500 italic">
+                                    No assets found in {activeWallet === 'spot' ? 'Spot' : 'Money'} Wallet
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        accessToken && (
+                            <TransactionHistoryList
+                                key={activeWallet}
+                                chains={historyChains}
+                                accessToken={accessToken}
+                            />
+                        )
+                    )}
+                </div>
             </div>
 
             <TransferModal
