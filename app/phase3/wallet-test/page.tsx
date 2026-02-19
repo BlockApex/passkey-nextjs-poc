@@ -2,23 +2,12 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { createEVMWallet } from '@/lib/evm-wallet';
 
 import { startRegistration } from '@simplewebauthn/browser';
-
-// We won't use the hook anymore for SVM
-// import { useWallet } from '@lazorkit/wallet';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001/api/v1';
 
 export default function WalletTestPage() {
-    // EVM State
-    const [evmLoading, setEvmLoading] = useState(false);
-    const [evmWallet, setEvmWallet] = useState<any>(null);
-    const [evmX, setEvmX] = useState('');
-    const [evmY, setEvmY] = useState('');
-    const [evmCredId, setEvmCredId] = useState('');
-
     // SVM State
     const [svmLoading, setSvmLoading] = useState(false);
     const [svmWallet, setSvmWallet] = useState<any>(null);
@@ -27,27 +16,6 @@ export default function WalletTestPage() {
     const [svmStep, setSvmStep] = useState('');
 
     const [error, setError] = useState('');
-
-    const handleCreateEVMWallet = async () => {
-        setEvmLoading(true);
-        setError('');
-        try {
-            if (!evmX || !evmY || !evmCredId) {
-                throw new Error('Please enter X, Y coordinates and Credential ID');
-            }
-            const wallet = await createEVMWallet({
-                x: evmX,
-                y: evmY,
-                credentialId: evmCredId
-            });
-            setEvmWallet(wallet);
-        } catch (err: any) {
-            console.error('EVM Wallet creation error:', err);
-            setError(err.message || 'Failed to create EVM wallet');
-        } finally {
-            setEvmLoading(false);
-        }
-    };
 
     const handleLoginAndCreateSVM = async () => {
         if (!loginUsername) {
@@ -199,7 +167,7 @@ export default function WalletTestPage() {
                 </Link>
 
                 <h1 className="text-4xl font-bold text-white mb-2">Phase 3: Wallet Test (Dev Mode)</h1>
-                <p className="text-gray-300 mb-8">Test EVM and SVM wallet creation</p>
+                <p className="text-gray-300 mb-8">Test SVM wallet creation</p>
 
                 {error && (
                     <div className="bg-red-500/20 border border-red-500/50 text-red-200 p-4 rounded-lg mb-8">
@@ -207,51 +175,7 @@ export default function WalletTestPage() {
                     </div>
                 )}
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    {/* EVM Section */}
-                    <div className="bg-white/10 backdrop-blur-lg border border-white/20 rounded-2xl p-6">
-                        <h2 className="text-2xl font-bold text-white mb-4">EVM Wallet (ZeroDev)</h2>
-                        <div className="space-y-4">
-                            <input
-                                type="text"
-                                placeholder="Public Key X Coordinate (hex)"
-                                className="w-full bg-white/5 border border-white/10 rounded p-3 text-white"
-                                value={evmX}
-                                onChange={e => setEvmX(e.target.value)}
-                            />
-                            <input
-                                type="text"
-                                placeholder="Public Key Y Coordinate (hex)"
-                                className="w-full bg-white/5 border border-white/10 rounded p-3 text-white"
-                                value={evmY}
-                                onChange={e => setEvmY(e.target.value)}
-                            />
-                            <input
-                                type="text"
-                                placeholder="Credential ID"
-                                className="w-full bg-white/5 border border-white/10 rounded p-3 text-white"
-                                value={evmCredId}
-                                onChange={e => setEvmCredId(e.target.value)}
-                            />
-                            <button
-                                onClick={handleCreateEVMWallet}
-                                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 rounded-lg transition-colors"
-                            >
-                                {evmLoading ? 'Creating...' : 'Create EVM Wallet'}
-                            </button>
-
-                            {/* EVM Results */}
-                            {evmWallet && (
-                                <div className="mt-4 p-4 bg-green-900/30 border border-green-500/30 rounded-lg">
-                                    <p className="text-sm text-gray-300">Address:</p>
-                                    <p className="font-mono text-green-400 break-all">{evmWallet.address}</p>
-                                    <p className="text-sm text-gray-300 mt-2">Chain ID:</p>
-                                    <p className="font-mono text-green-400">{evmWallet.chainId}</p>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-
+                <div className="max-w-xl mx-auto">
                     {/* SVM Section */}
                     <div className="bg-white/10 backdrop-blur-lg border border-white/20 rounded-2xl p-6">
                         <h2 className="text-2xl font-bold text-white mb-4">SVM Wallet (Lazorkit Local)</h2>

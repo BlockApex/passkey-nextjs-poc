@@ -1,13 +1,32 @@
 import { useState, useEffect } from 'react';
-import { createPublicClient, http, parseAbi, encodeFunctionData, parseUnits, formatUnits, keccak256, toHex, Address } from 'viem';
-import { sepolia } from 'viem/chains';
-import { createKernelAccount, createKernelAccountClient, createZeroDevPaymasterClient } from "@zerodev/sdk";
-import { toPasskeyValidator, PasskeyValidatorContractVersion } from "@zerodev/passkey-validator";
-import { toWebAuthnKey, WebAuthnMode } from "@zerodev/webauthn-key";
-import { getEntryPoint, KERNEL_V3_1 } from "@zerodev/sdk/constants";
 import { useLazorkitCustomSigner } from '@/hooks/useLazorkitCustomSigner';
+import { useRhinestoneTransfer } from '@/hooks/useRhinestoneTransfer';
 import { getConnection, buildUsdcTransferInstructions, createTransferSuccessMessage, validateRecipientAddress, validateTransferAmount, getUsdcBalance } from '@/lib/solana-utils';
 import { PublicKey } from '@solana/web3.js';
+
+/** Get the explorer URL for a given chain ID */
+function getExplorerTxUrl(chainId: number | undefined, hash: string): string {
+    switch (chainId) {
+        case 9745:
+            return `https://explorer.plasma.to/tx/${hash}`;
+        case 9746:
+            return `https://explorer-testnet.plasma.to/tx/${hash}`;
+        case 11155111:
+            return `https://sepolia.etherscan.io/tx/${hash}`;
+        case 1:
+            return `https://etherscan.io/tx/${hash}`;
+        case 8453:
+            return `https://basescan.org/tx/${hash}`;
+        case 42161:
+            return `https://arbiscan.io/tx/${hash}`;
+        case 10:
+            return `https://optimistic.etherscan.io/tx/${hash}`;
+        case 137:
+            return `https://polygonscan.com/tx/${hash}`;
+        default:
+            return `https://sepolia.etherscan.io/tx/${hash}`;
+    }
+}
 
 interface TransferModalProps {
     isOpen: boolean;
@@ -22,11 +41,12 @@ interface TransferModalProps {
         type?: string;
     } | null;
     accessToken: string;
+    walletType: 'spot' | 'money';
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
 
-export default function TransferModal({ isOpen, onClose, token, accessToken }: TransferModalProps) {
+export default function TransferModal({ isOpen, onClose, token, accessToken, walletType }: TransferModalProps) {
     const [recipient, setRecipient] = useState('');
     const [amount, setAmount] = useState('');
     const [loading, setLoading] = useState(false);
@@ -34,11 +54,15 @@ export default function TransferModal({ isOpen, onClose, token, accessToken }: T
     const [successHash, setSuccessHash] = useState('');
     const [status, setStatus] = useState('');
 
-    // LazorKit Custom Signer Hook (Unified Identity)
+    // LazorKit Custom Signer Hook (SVM)
     const { signAndSendTransaction, isSigning } = useLazorkitCustomSigner();
+
+    // Rhinestone Transfer Hook (EVM)
+    const { sendEvmTransfer, isSending: isEvmSending } = useRhinestoneTransfer();
 
     // Helper to determine if token is SVM based
     const isSVM = token?.type === 'svm' || token?.chainId === 103 || token?.chainId === 900;
+    const isPlasma = token?.chainId === 9745 || token?.chainId === 9746;
 
     useEffect(() => {
         if (!isOpen) {
@@ -94,25 +118,24 @@ export default function TransferModal({ isOpen, onClose, token, accessToken }: T
                 if (!configRes.ok) throw new Error('Failed to fetch wallet config');
                 const config = await configRes.json();
 
-                // Fetch derived address from localStorage
-                // We previously fetched from /api/v1/wallet but that endpoint does not exist
-                const walletStr = localStorage.getItem('wallet');
+                // Fetch sender address from wallets in localStorage
+                const walletsStr = localStorage.getItem('wallets');
                 let senderAddress = '';
 
-
-                if (walletStr) {
+                if (walletsStr) {
                     try {
-                        const walletData = JSON.parse(walletStr);
-                        if (walletData.svm && walletData.svm.address) {
-                            senderAddress = walletData.svm.address;
+                        const walletsData = JSON.parse(walletsStr);
+                        const activeWallet = walletsData[walletType];
+                        if (activeWallet?.svm?.address) {
+                            senderAddress = activeWallet.svm.address;
                         }
                     } catch (e) {
-                        console.error('Failed to parse wallet from localStorage', e);
+                        console.error('Failed to parse wallets from localStorage', e);
                     }
                 }
 
                 if (!senderAddress) {
-                    throw new Error('SVM Wallet address not found. Please try logging in again.');
+                    throw new Error(`SVM address not found for ${walletType} wallet. Please try logging in again.`);
                 }
 
                 const senderPubkey = new PublicKey(senderAddress);
@@ -159,117 +182,20 @@ export default function TransferModal({ isOpen, onClose, token, accessToken }: T
                 return; // Exit function after successful SVM transfer
             }
 
-            // --- EVM / ZeroDev Flow ---
-            // 1. Fetch Wallet Config from Backend
-            const configRes = await fetch(`${API_BASE}/wallet/config`, {
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`,
-                    'ngrok-skip-browser-warning': 'true'
-                }
+            // --- EVM / Rhinestone Flow ---
+            setStatus(isPlasma ? 'Initializing Plasma Transfer...' : 'Initializing Rhinestone...');
+
+            const result = await sendEvmTransfer({
+                accessToken: accessToken || localStorage.getItem('accessToken') || '',
+                chainId: token.chainId || 11155111, // Default to Sepolia
+                to: recipient,
+                tokenAddress: token.address,
+                amount,
+                decimals: token.decimals || 18,
+                walletType,
             });
 
-            if (!configRes.ok) {
-                throw new Error('Failed to fetch wallet config');
-            }
-
-            const config = await configRes.json();
-            console.log('Wallet Config:', config);
-
-            // 2. Initialize Public Client
-            const publicClient = createPublicClient({
-                transport: http(config.zerodev.bundlerUrl), // Use Bundler URL for RPC
-                chain: sepolia // TODO: Make dynamic based on config.chainId
-            });
-
-            // 3. Initialize Passkey Validator using our custom passkey server
-            setStatus('Initializing Wallet...');
-            const entryPoint = getEntryPoint("0.7");
-
-            // Manually construct WebAuthnKey using config data
-            // Helper to convert base64url to bytes
-            const b64ToBytes = (base64: string): Uint8Array => {
-                const binString = atob(base64.replace(/-/g, '+').replace(/_/g, '/'));
-                return Uint8Array.from(binString, (m) => m.codePointAt(0)!);
-            }
-
-            const credentialIdBytes = b64ToBytes(config.credentialId);
-            const authenticatorIdHash = keccak256(credentialIdBytes);
-
-            const webAuthnKey = {
-                pubX: BigInt(config.pubX),
-                pubY: BigInt(config.pubY),
-                authenticatorId: config.credentialId,
-                authenticatorIdHash: authenticatorIdHash,
-                rpID: window.location.hostname
-            };
-
-            const passkeyValidator = await toPasskeyValidator(publicClient, {
-                webAuthnKey,
-                entryPoint,
-                kernelVersion: KERNEL_V3_1,
-                validatorContractVersion: PasskeyValidatorContractVersion.V0_0_3_PATCHED
-            });
-
-            // 4. Create Paymaster Client
-            const paymasterClient = createZeroDevPaymasterClient({
-                chain: sepolia,
-                transport: http(config.zerodev.paymasterUrl)
-            });
-
-            // 5. Create Account
-            const account = await createKernelAccount(publicClient, {
-                plugins: { sudo: passkeyValidator },
-                entryPoint,
-                kernelVersion: KERNEL_V3_1
-            });
-
-            // 6. Create Kernel Client with Paymaster
-            const kernelClient = createKernelAccountClient({
-                account,
-                chain: sepolia,
-                bundlerTransport: http(config.zerodev.bundlerUrl),
-                paymaster: paymasterClient
-            });
-
-            setStatus('Constructing Transaction...');
-
-            // 5. Construct Call Data
-            let callData;
-            let targetAddress = recipient as `0x${string}`;
-            let value = BigInt(0);
-            let to = targetAddress;
-
-            if (token.address === 'native') {
-                // Native ETH Transfer
-                value = parseUnits(amount, token.decimals || 18);
-            } else {
-                // ERC20 Transfer
-                to = token.address as `0x${string}`;
-                const abi = parseAbi(['function transfer(address to, uint256 amount)']);
-                // Debug log
-                console.log('Encoding transfer:', { to: targetAddress, amount, decimals: token.decimals });
-                callData = encodeFunctionData({
-                    abi,
-                    functionName: 'transfer',
-                    args: [targetAddress, parseUnits(amount, token.decimals || 18)]
-                });
-            }
-
-            setStatus('Please sign with Passkey...');
-
-            // 6. Send Transaction (handles UserOp, Signing, Paymaster, and Waiting)
-            const txHash = await kernelClient.sendTransaction({
-                calls: [{
-                    to,
-                    value,
-                    data: callData || '0x'
-                }]
-            });
-
-            setStatus('Transaction Submitted! Waiting for receipt...');
-            console.log('Tx Hash:', txHash);
-
-            setSuccessHash(txHash);
+            setSuccessHash(result.hash);
             setStatus('Success!');
 
         } catch (err: any) {
@@ -331,10 +257,10 @@ export default function TransferModal({ isOpen, onClose, token, accessToken }: T
 
                         <button
                             onClick={handleTransfer}
-                            disabled={loading || (isSigning && isSVM)}
+                            disabled={loading || (isSigning && isSVM) || isEvmSending}
                             className="w-full bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-semibold py-3 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-2"
                         >
-                            {loading || (isSigning && isSVM) ? 'Processing...' : 'Send Now'}
+                            {loading || (isSigning && isSVM) || isEvmSending ? 'Processing...' : 'Send Now'}
                         </button>
                     </div>
                 ) : (
@@ -360,7 +286,7 @@ export default function TransferModal({ isOpen, onClose, token, accessToken }: T
                                 <>
                                     Tx Hash: <br />
                                     <a
-                                        href={`https://sepolia.etherscan.io/tx/${successHash}`}
+                                        href={getExplorerTxUrl(token?.chainId, successHash)}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="text-purple-400 hover:text-purple-300 hover:underline"
@@ -383,8 +309,3 @@ export default function TransferModal({ isOpen, onClose, token, accessToken }: T
     );
 }
 
-function base64ToBytes(base64: string): Uint8Array {
-    debugger
-    const binString = atob(base64.replace(/-/g, '+').replace(/_/g, '/'));
-    return Uint8Array.from(binString, (m) => m.codePointAt(0)!);
-}

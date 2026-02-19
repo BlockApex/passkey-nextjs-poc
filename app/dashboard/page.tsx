@@ -488,6 +488,7 @@ export default function DashboardPage() {
                 onClose={() => setIsTransferModalOpen(false)}
                 token={selectedToken}
                 accessToken={localStorage.getItem('accessToken') || ''}
+                walletType={activeWallet}
             />
 
             <OfframpModal
