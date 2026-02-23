@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import TransferModal from './components/TransferModal';
 import OfframpModal from './components/OfframpModal';
 import TransactionHistoryList from './components/TransactionHistoryList';
+import { useDepositRegistration } from '@/hooks/useDepositRegistration';
 
 interface ChainBreakdown {
     chainId: number;
@@ -55,6 +56,9 @@ export default function DashboardPage() {
     const [activeTab, setActiveTab] = useState<'tokens' | 'history'>('tokens');
     const [selectedCurrency, setSelectedCurrency] = useState<string>('USD');
     const [activeWallet, setActiveWallet] = useState<ActiveWallet>('spot');
+    const [depositRegistered, setDepositRegistered] = useState(false);
+    const [depositMessage, setDepositMessage] = useState<string | null>(null);
+    const { registerForDeposits, isRegistering, error: depositError } = useDepositRegistration();
 
     // Parse wallet addresses from localStorage
     const walletAddresses = useMemo<WalletAddresses>(() => {
@@ -62,6 +66,10 @@ export default function DashboardPage() {
             const walletsData = localStorage.getItem('wallets');
             if (walletsData) {
                 const wallets = JSON.parse(walletsData);
+                // Initialize deposit registration state from stored wallet data
+                if (wallets?.money?.depositRegistered) {
+                    setDepositRegistered(true);
+                }
                 return {
                     spotEvm: wallets?.spot?.evm?.address || null,
                     spotSvm: wallets?.spot?.svm?.address || null,
@@ -347,6 +355,63 @@ export default function DashboardPage() {
                                         </div>
                                     )}
                                     <p className="text-xs text-slate-400 italic px-3">Plasma network · USDT0 target</p>
+
+                                    {/* Auto-Deposits Registration */}
+                                    <div className="mt-3 p-4 bg-emerald-50 rounded-lg border border-emerald-200">
+                                        {depositRegistered ? (
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-emerald-600 text-lg">✅</span>
+                                                <div>
+                                                    <p className="text-sm font-semibold text-emerald-800">Auto-Deposits Enabled</p>
+                                                    <p className="text-xs text-emerald-600">Stablecoins sent to your address on any chain will auto-bridge to USDT0 on Plasma</p>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div>
+                                                <div className="flex items-center justify-between">
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-emerald-800">Enable Auto-Deposits</p>
+                                                        <p className="text-xs text-emerald-600">Auto-bridge USDC/USDT from any chain to USDT0 on Plasma</p>
+                                                    </div>
+                                                    <button
+                                                        onClick={async () => {
+                                                            if (!accessToken) return;
+                                                            setDepositMessage(null);
+                                                            try {
+                                                                const result = await registerForDeposits(accessToken);
+                                                                setDepositRegistered(true);
+                                                                setDepositMessage(result.message);
+                                                            } catch (err: any) {
+                                                                setDepositMessage(err?.message || 'Registration failed');
+                                                            }
+                                                        }}
+                                                        disabled={isRegistering || !accessToken}
+                                                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                                    >
+                                                        {isRegistering ? (
+                                                            <>
+                                                                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                                                </svg>
+                                                                Signing...
+                                                            </>
+                                                        ) : (
+                                                            '🔐 Enable'
+                                                        )}
+                                                    </button>
+                                                </div>
+                                                {depositMessage && (
+                                                    <p className={`text-xs mt-2 ${depositError ? 'text-red-600' : 'text-emerald-600'}`}>
+                                                        {depositMessage}
+                                                    </p>
+                                                )}
+                                                {depositError && (
+                                                    <p className="text-xs mt-1 text-red-600">{depositError}</p>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
                                 </>
                             )}
                         </div>
