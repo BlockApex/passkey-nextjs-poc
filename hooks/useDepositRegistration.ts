@@ -39,6 +39,7 @@ function getRhinestoneEndpoint(): string {
  *
  * After registration, any stablecoins sent to the user's Nexus address
  * on any supported chain will auto-bridge to USDT0 on Plasma.
+ * Registration also returns a Solana deposit address for 1-click Solana deposits.
  */
 export function useDepositRegistration() {
     const [isRegistering, setIsRegistering] = useState(false);
@@ -50,10 +51,11 @@ export function useDepositRegistration() {
      * Network (testnet/mainnet) is controlled by NEXT_PUBLIC_USE_TESTNET env var.
      *
      * @param accessToken - JWT access token
+     * @returns Object with message, address, evmDepositAddress, and solanaDepositAddress
      */
     const registerForDeposits = useCallback(async (
         accessToken: string,
-    ): Promise<{ message: string; address: string }> => {
+    ): Promise<{ message: string; address: string; evmDepositAddress?: string; solanaDepositAddress?: string }> => {
         const useTestnet = process.env.NEXT_PUBLIC_USE_TESTNET !== 'false';
         setIsRegistering(true);
         setError(null);
@@ -177,6 +179,12 @@ export function useDepositRegistration() {
 
             const result = await registerRes.json();
             console.log(`[deposit-reg] Registration complete:`, result);
+            if (result.solanaDepositAddress) {
+                console.log(`[deposit-reg] Solana deposit address: ${result.solanaDepositAddress}`);
+            }
+            if (result.evmDepositAddress) {
+                console.log(`[deposit-reg] EVM deposit address: ${result.evmDepositAddress}`);
+            }
 
             return result;
         } catch (err: any) {

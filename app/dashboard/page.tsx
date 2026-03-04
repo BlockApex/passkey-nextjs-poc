@@ -36,6 +36,7 @@ interface WalletAddresses {
     spotEvm: string | null;
     spotSvm: string | null;
     moneyEvm: string | null;
+    moneySvm: string | null;
 }
 
 type ActiveWallet = 'spot' | 'money';
@@ -74,12 +75,13 @@ export default function DashboardPage() {
                     spotEvm: wallets?.spot?.evm?.address || null,
                     spotSvm: wallets?.spot?.svm?.address || null,
                     moneyEvm: wallets?.money?.evm?.address || null,
+                    moneySvm: wallets?.money?.svm?.address || null,
                 };
             }
         } catch (e) {
             console.error('Error parsing wallet data:', e);
         }
-        return { spotEvm: null, spotSvm: null, moneyEvm: null };
+        return { spotEvm: null, spotSvm: null, moneyEvm: null, moneySvm: null };
     }, []);
 
     useEffect(() => {
@@ -381,6 +383,20 @@ export default function DashboardPage() {
                                                                 const result = await registerForDeposits(accessToken);
                                                                 setDepositRegistered(true);
                                                                 setDepositMessage(result.message);
+                                                                // Persist solanaDepositAddress as money SVM address in localStorage
+                                                                if (result.solanaDepositAddress) {
+                                                                    try {
+                                                                        const walletsData = localStorage.getItem('wallets');
+                                                                        if (walletsData) {
+                                                                            const wallets = JSON.parse(walletsData);
+                                                                            if (wallets.money) {
+                                                                                wallets.money.svm = { address: result.solanaDepositAddress };
+                                                                                wallets.money.depositRegistered = true;
+                                                                                localStorage.setItem('wallets', JSON.stringify(wallets));
+                                                                            }
+                                                                        }
+                                                                    } catch (e) { /* ignore localStorage errors */ }
+                                                                }
                                                             } catch (err: any) {
                                                                 setDepositMessage(err?.message || 'Registration failed');
                                                             }
@@ -412,6 +428,22 @@ export default function DashboardPage() {
                                             </div>
                                         )}
                                     </div>
+
+                                    {/* Money Wallet SVM Address (Rhinestone Solana Deposit Address) */}
+                                    {walletAddresses.moneySvm && (
+                                        <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                                            <div className="flex items-center gap-3">
+                                                <span className="px-2 py-1 rounded text-xs font-bold uppercase bg-purple-100 text-purple-700">SVM</span>
+                                                <div>
+                                                    <code className="text-sm text-slate-600 font-mono">{walletAddresses.moneySvm.slice(0, 8)}...{walletAddresses.moneySvm.slice(-6)}</code>
+                                                    {depositRegistered && (
+                                                        <p className="text-xs text-emerald-600 mt-0.5">Send SOL/USDC here → auto-bridges to USDT0 on Plasma</p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <CopyButton address={walletAddresses.moneySvm} id="money-svm-copy" />
+                                        </div>
+                                    )}
                                 </>
                             )}
                         </div>
