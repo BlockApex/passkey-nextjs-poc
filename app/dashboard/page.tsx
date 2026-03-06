@@ -54,12 +54,18 @@ export default function DashboardPage() {
     const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
     const [selectedOfframpToken, setSelectedOfframpToken] = useState<any>(null);
     const [isOfframpModalOpen, setIsOfframpModalOpen] = useState(false);
-    const [activeTab, setActiveTab] = useState<'tokens' | 'history'>('tokens');
+    const [activeTab, setActiveTab] = useState<'tokens' | 'history' | 'unclaimed'>('tokens');
     const [selectedCurrency, setSelectedCurrency] = useState<string>('USD');
     const [activeWallet, setActiveWallet] = useState<ActiveWallet>('spot');
     const [depositRegistered, setDepositRegistered] = useState(false);
     const [depositMessage, setDepositMessage] = useState<string | null>(null);
     const { registerForDeposits, isRegistering, error: depositError } = useDepositRegistration();
+
+    // Unclaimed tokens state
+    const [unclaimedTokens, setUnclaimedTokens] = useState<any>(null);
+    const [unclaimedLoading, setUnclaimedLoading] = useState(false);
+    const [claimRecipient, setClaimRecipient] = useState<string | undefined>(undefined);
+    const [claimAmount, setClaimAmount] = useState<string | undefined>(undefined);
 
     // Parse wallet addresses from localStorage
     const walletAddresses = useMemo<WalletAddresses>(() => {
@@ -119,10 +125,28 @@ export default function DashboardPage() {
 
             if (spotRes.ok) setSpotPortfolio(await spotRes.json());
             if (moneyRes.ok) setMoneyPortfolio(await moneyRes.json());
+
+            // Also fetch unclaimed tokens
+            fetchUnclaimedTokens(token);
         } catch (err: any) {
             setError(err.message);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const fetchUnclaimedTokens = async (token: string) => {
+        setUnclaimedLoading(true);
+        try {
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
+            const res = await fetch(`${apiUrl}/transactions/unclaimed`, {
+                headers: { 'Authorization': `Bearer ${token}`, 'ngrok-skip-browser-warning': 'true' }
+            });
+            if (res.ok) setUnclaimedTokens(await res.json());
+        } catch (err) {
+            console.error('Failed to fetch unclaimed tokens:', err);
+        } finally {
+            setUnclaimedLoading(false);
         }
     };
 
@@ -469,6 +493,22 @@ export default function DashboardPage() {
                         >
                             History
                         </button>
+                        {activeWallet === 'money' && (
+                            <button
+                                onClick={() => setActiveTab('unclaimed')}
+                                className={`px-6 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'unclaimed'
+                                    ? 'border-amber-500 text-amber-600'
+                                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                                }`}
+                            >
+                                Unclaimed
+                                {unclaimedTokens && unclaimedTokens.assets.length > 0 && (
+                                    <span className="ml-1.5 bg-amber-100 text-amber-700 text-xs font-bold px-1.5 py-0.5 rounded-full">
+                                        {unclaimedTokens.assets.length}
+                                    </span>
+                                )}
+                            </button>
+                        )}
                     </div>
 
                     {/* Tab Content */}
@@ -568,6 +608,83 @@ export default function DashboardPage() {
                                 </div>
                             )}
                         </div>
+                    ) : activeTab === 'unclaimed' ? (
+                        /* Unclaimed Tokens Tab */
+                        <div className="space-y-4">
+                            {unclaimedLoading ? (
+                                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-10 text-center text-slate-500">Loading unclaimed tokens...</div>
+                            ) : unclaimedTokens && unclaimedTokens.assets.length > 0 ? (
+                                <>
+                                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-700">
+                                        These tokens were deposited to your Money Wallet but are not auto-bridged. Claim them to move to your Spot Wallet.
+                                    </div>
+                                    {unclaimedTokens.assets.map((asset: any, idx: number) => (
+                                        <div key={idx} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                                            <div className="px-6 py-4 flex items-center justify-between">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="h-10 w-10 bg-gradient-to-br from-amber-400 to-orange-500 rounded-full flex items-center justify-center font-bold text-white">
+                                                        {asset.symbol[0]}
+                                                    </div>
+                                                    <div>
+                                                        <h3 className="font-bold text-slate-900">{asset.name}</h3>
+                                                        <p className="text-sm text-slate-500">{asset.symbol}</p>
+                                                    </div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="text-lg font-bold text-slate-900">{parseFloat(asset.totalBalance).toFixed(6)}</p>
+                                                    <p className="text-xs text-slate-500">${asset.totalUsdValue} USD</p>
+                                                </div>
+                                            </div>
+                                            <div className="divide-y divide-slate-100">
+                                                {asset.chains.map((chain: any, i: number) => (
+                                                    <div key={i} className="px-6 py-3 flex items-center justify-between bg-slate-50">
+                                                        <div className="flex items-center gap-3">
+                                                            <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${chain.type === 'evm' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                                                {chain.type}
+                                                            </span>
+                                                            <span className="text-sm text-slate-700">{chain.network}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-3">
+                                                            <span className="text-sm font-mono text-slate-700">{parseFloat(chain.balance).toFixed(6)}</span>
+                                                            <button
+                                                                onClick={() => {
+                                                                    const spotAddr = chain.type === 'evm'
+                                                                        ? asset.claimTo?.evmAddress
+                                                                        : asset.claimTo?.svmAddress;
+                                                                    setClaimRecipient(spotAddr || '');
+                                                                    setClaimAmount(chain.balance);
+                                                                    setSelectedToken({
+                                                                        symbol: asset.symbol,
+                                                                        name: asset.name,
+                                                                        balance: chain.balance,
+                                                                        decimals: asset.decimals,
+                                                                        address: chain.address,
+                                                                        chainId: chain.chainId,
+                                                                        type: chain.type
+                                                                    });
+                                                                    setIsTransferModalOpen(true);
+                                                                }}
+                                                                disabled={parseFloat(chain.balance) === 0}
+                                                                className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition ${parseFloat(chain.balance) === 0
+                                                                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                                                                    : 'bg-amber-500 hover:bg-amber-600 text-white'
+                                                                }`}
+                                                            >
+                                                                Claim
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </>
+                            ) : (
+                                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-10 text-center text-slate-500 italic">
+                                    No unclaimed tokens
+                                </div>
+                            )}
+                        </div>
                     ) : (
                         accessToken && (
                             <TransactionHistoryList
@@ -582,10 +699,12 @@ export default function DashboardPage() {
 
             <TransferModal
                 isOpen={isTransferModalOpen}
-                onClose={() => setIsTransferModalOpen(false)}
+                onClose={() => { setIsTransferModalOpen(false); setClaimRecipient(undefined); setClaimAmount(undefined); }}
                 token={selectedToken}
                 accessToken={localStorage.getItem('accessToken') || ''}
                 walletType={activeWallet}
+                defaultRecipient={claimRecipient}
+                defaultAmount={claimAmount}
             />
 
             <OfframpModal

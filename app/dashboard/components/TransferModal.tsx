@@ -42,11 +42,13 @@ interface TransferModalProps {
     } | null;
     accessToken: string;
     walletType: 'spot' | 'money';
+    defaultRecipient?: string;
+    defaultAmount?: string;
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
 
-export default function TransferModal({ isOpen, onClose, token, accessToken, walletType }: TransferModalProps) {
+export default function TransferModal({ isOpen, onClose, token, accessToken, walletType, defaultRecipient, defaultAmount }: TransferModalProps) {
     const [recipient, setRecipient] = useState('');
     const [amount, setAmount] = useState('');
     const [loading, setLoading] = useState(false);
@@ -71,8 +73,12 @@ export default function TransferModal({ isOpen, onClose, token, accessToken, wal
             setError('');
             setSuccessHash('');
             setStatus('');
+        } else {
+            // Prefill with defaults if provided (e.g., for claim flow)
+            if (defaultRecipient) setRecipient(defaultRecipient);
+            if (defaultAmount) setAmount(defaultAmount);
         }
-    }, [isOpen]);
+    }, [isOpen, defaultRecipient, defaultAmount]);
 
     if (!isOpen || !token) return null;
 
