@@ -227,9 +227,18 @@ export default function DashboardPage() {
             <div className="max-w-4xl mx-auto">
                 {/* Header */}
                 <div className="flex justify-between items-center mb-6">
-                    <div>
-                        <h1 className="text-3xl font-bold text-slate-900">My Wallets</h1>
-                        {username && <p className="text-slate-500">Welcome back, @{username}</p>}
+                    <div className="flex items-center gap-3">
+                        <button
+                            onClick={() => router.push('/dashboard/avatar-select')}
+                            className="w-10 h-10 rounded-full bg-emerald-100 hover:bg-emerald-200 flex items-center justify-center transition"
+                            title="Change avatar"
+                        >
+                            <span className="text-lg">😀</span>
+                        </button>
+                        <div>
+                            <h1 className="text-3xl font-bold text-slate-900">My Wallets</h1>
+                            {username && <p className="text-slate-500">Welcome back, @{username}</p>}
+                        </div>
                     </div>
                     <div className="flex items-center gap-4">
                         <button
