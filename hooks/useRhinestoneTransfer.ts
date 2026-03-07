@@ -13,7 +13,26 @@ import {
 import * as viemChains from 'viem/chains';
 import { plasma, plasmaTestnet, PLASMA_USDT0_ADDRESS } from '@/lib/chains/plasma';
 
+/** Check if a chain ID is a Plasma chain */
+function isPlasmaChain(chainId: number): boolean {
+    return chainId === plasma.id || chainId === plasmaTestnet.id;
+}
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
+
+/**
+ * Safely convert a tx hash value (BigInt, number, or string) to a 0x-prefixed hex string.
+ */
+function toHexHash(value: any): string | null {
+    if (!value) return null;
+    if (typeof value === 'string') {
+        return value.startsWith('0x') ? value : `0x${value}`;
+    }
+    if (typeof value === 'bigint' || typeof value === 'number') {
+        return '0x' + BigInt(value).toString(16);
+    }
+    return value.toString();
+}
 
 /**
  * Get the Rhinestone SDK endpoint URL — uses our API proxy
@@ -125,6 +144,10 @@ export function useRhinestoneTransfer() {
 
     /**
      * Send a same-chain EVM transfer (native ETH or ERC-20).
+     *
+     * For Plasma chains: uses sendUserOperation (direct on-chain UserOp,
+     * bypasses the Rhinestone orchestrator/intents system which doesn't support Plasma).
+     * For other chains: uses sendTransaction (goes through intents/orchestrator).
      */
     const sendEvmTransfer = useCallback(async (params: {
         accessToken: string;
@@ -147,11 +170,6 @@ export function useRhinestoneTransfer() {
             const chain = getChainById(params.chainId);
             const amountWei = parseUnits(params.amount, params.decimals);
 
-            // Check if this is a Plasma USDT0 transfer (gasless at protocol level)
-            const isPlasmaUsdt0 =
-                (params.chainId === plasma.id || params.chainId === plasmaTestnet.id) &&
-                params.tokenAddress.toLowerCase() === PLASMA_USDT0_ADDRESS.toLowerCase();
-
             if (params.tokenAddress === 'native') {
                 // Native ETH transfer
                 const txResult = await rhinestoneAccount.sendTransaction({
@@ -165,30 +183,46 @@ export function useRhinestoneTransfer() {
                 });
 
                 const receipt = await rhinestoneAccount.waitForExecution(txResult);
-                return { hash: (receipt as any)?.transactionHash || (txResult as any)?.id?.toString() || 'submitted' };
-            } else {
-                // ERC-20 transfer
-                const data = encodeFunctionData({
-                    abi: erc20Abi,
-                    functionName: 'transfer',
-                    args: [params.to as `0x${string}`, amountWei],
-                });
+                return { hash: toHexHash((receipt as any)?.transactionHash) || toHexHash((txResult as any)?.id) || 'submitted' };
+            }
 
-                const txResult = await rhinestoneAccount.sendTransaction({
+            // ERC-20 transfer
+            const data = encodeFunctionData({
+                abi: erc20Abi,
+                functionName: 'transfer',
+                args: [params.to as `0x${string}`, amountWei],
+            });
+
+            if (isPlasmaChain(params.chainId)) {
+                // Plasma: use sendUserOperation (direct on-chain, bypasses orchestrator).
+                // USDT0 on Plasma is gasless at protocol level — no paymaster needed.
+                console.log('[Rhinestone] Plasma chain detected — using sendUserOperation (direct)');
+                const userOpResult = await rhinestoneAccount.sendUserOperation({
                     chain,
                     calls: [{
                         to: params.tokenAddress as `0x${string}`,
                         value: BigInt(0),
                         data,
                     }],
-                    // USDT0 on Plasma is gasless at protocol level;
-                    // other ERC-20s still need sponsorship
-                    sponsored: !isPlasmaUsdt0,
                 });
 
-                const receipt = await rhinestoneAccount.waitForExecution(txResult);
-                return { hash: (receipt as any)?.transactionHash || (txResult as any)?.id?.toString() || 'submitted' };
+                const receipt = await rhinestoneAccount.waitForExecution(userOpResult);
+                return { hash: toHexHash((receipt as any)?.transactionHash) || toHexHash(userOpResult.hash) || 'submitted' };
             }
+
+            // Non-Plasma ERC-20: use sendTransaction (orchestrator/intents)
+            const txResult = await rhinestoneAccount.sendTransaction({
+                chain,
+                calls: [{
+                    to: params.tokenAddress as `0x${string}`,
+                    value: BigInt(0),
+                    data,
+                }],
+                sponsored: true,
+            });
+
+            const receipt = await rhinestoneAccount.waitForExecution(txResult);
+            return { hash: toHexHash((receipt as any)?.transactionHash) || toHexHash((txResult as any)?.id) || 'submitted' };
         } catch (err: any) {
             const message = err.message || 'EVM transfer failed';
             setError(message);
@@ -250,11 +284,11 @@ export function useRhinestoneTransfer() {
 
             const receipt = await rhinestoneAccount.waitForExecution(txResult);
             return {
-                hash: (receipt as any)?.fillTransactionHash ||
-                    (receipt as any)?.transactionHash ||
-                    (txResult as any)?.id?.toString() ||
+                hash: toHexHash((receipt as any)?.fillTransactionHash) ||
+                    toHexHash((receipt as any)?.transactionHash) ||
+                    toHexHash((txResult as any)?.id) ||
                     'submitted',
-                intentId: (txResult as any)?.id?.toString(),
+                intentId: toHexHash((txResult as any)?.id) || undefined,
             };
         } catch (err: any) {
             const message = err.message || 'Cross-chain transfer failed';

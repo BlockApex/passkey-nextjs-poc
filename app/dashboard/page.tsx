@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import TransferModal from './components/TransferModal';
 import OfframpModal from './components/OfframpModal';
-import TransactionHistoryList from './components/TransactionHistoryList';
+// TransactionHistoryList removed — history is now a dedicated page at /dashboard/history
 import { useDepositRegistration } from '@/hooks/useDepositRegistration';
 
 interface ChainBreakdown {
@@ -54,7 +54,7 @@ export default function DashboardPage() {
     const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
     const [selectedOfframpToken, setSelectedOfframpToken] = useState<any>(null);
     const [isOfframpModalOpen, setIsOfframpModalOpen] = useState(false);
-    const [activeTab, setActiveTab] = useState<'tokens' | 'history' | 'unclaimed'>('tokens');
+    const [activeTab, setActiveTab] = useState<'tokens' | 'unclaimed'>('tokens');
     const [selectedCurrency, setSelectedCurrency] = useState<string>('USD');
     const [activeWallet, setActiveWallet] = useState<ActiveWallet>('spot');
     const [depositRegistered, setDepositRegistered] = useState(false);
@@ -198,24 +198,7 @@ export default function DashboardPage() {
         </button>
     );
 
-    // Build history chains from active wallet's addresses
-    // NOTE: Must be before any early returns to satisfy Rules of Hooks
-    const historyChains = useMemo(() => {
-        const chains: any[] = [];
-        if (activeWallet === 'spot') {
-            if (walletAddresses.spotEvm) {
-                chains.push({ chainId: 11155111, type: 'evm' as const, address: walletAddresses.spotEvm, assets: [] });
-            }
-            if (walletAddresses.spotSvm) {
-                chains.push({ chainId: 0, type: 'svm' as const, address: walletAddresses.spotSvm, network: 'devnet', assets: [] });
-            }
-        } else {
-            if (walletAddresses.moneyEvm) {
-                chains.push({ chainId: 9745, type: 'evm' as const, address: walletAddresses.moneyEvm, assets: [] });
-            }
-        }
-        return chains;
-    }, [activeWallet, walletAddresses]);
+    // historyChains removed — history is now a dedicated page
 
     if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
 
@@ -473,7 +456,7 @@ export default function DashboardPage() {
                         </div>
                     </div>
 
-                    {/* Assets / History Tabs */}
+                    {/* Assets / Unclaimed Tabs + History Link */}
                     <div className="flex border-b border-slate-200 mb-0">
                         <button
                             onClick={() => setActiveTab('tokens')}
@@ -483,15 +466,6 @@ export default function DashboardPage() {
                             }`}
                         >
                             Assets
-                        </button>
-                        <button
-                            onClick={() => setActiveTab('history')}
-                            className={`px-6 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'history'
-                                ? cfg.tabActive
-                                : 'border-transparent text-slate-500 hover:text-slate-700'
-                            }`}
-                        >
-                            History
                         </button>
                         {activeWallet === 'money' && (
                             <button
@@ -509,6 +483,27 @@ export default function DashboardPage() {
                                 )}
                             </button>
                         )}
+                        <div className="flex-1" />
+                        {activeWallet === 'money' && (
+                            <button
+                                onClick={() => router.push('/dashboard/payment-requests')}
+                                className="px-4 py-3 text-sm font-medium text-slate-500 hover:text-slate-700 transition flex items-center gap-1.5 border-b-2 border-transparent"
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                                </svg>
+                                Requests
+                            </button>
+                        )}
+                        <button
+                            onClick={() => router.push('/dashboard/history')}
+                            className="px-4 py-3 text-sm font-medium text-slate-500 hover:text-slate-700 transition flex items-center gap-1.5 border-b-2 border-transparent"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            History
+                        </button>
                     </div>
 
                     {/* Tab Content */}
@@ -685,15 +680,7 @@ export default function DashboardPage() {
                                 </div>
                             )}
                         </div>
-                    ) : (
-                        accessToken && (
-                            <TransactionHistoryList
-                                key={activeWallet}
-                                chains={historyChains}
-                                accessToken={accessToken}
-                            />
-                        )
-                    )}
+                    ) : null}
                 </div>
             </div>
 

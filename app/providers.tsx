@@ -6,7 +6,7 @@ import { ReactNode } from 'react';
 const RPC_URL = "https://api.devnet.solana.com";
 const PORTAL_URL = "https://portal.lazor.sh";
 const PAYMASTER_CONFIG = {
-    paymasterUrl: "https://kora.devnet.lazorkit.com"
+    paymasterUrl: "/api/lazorkit-paymaster"
 };
 
 export function Providers({ children }: { children: ReactNode }) {

@@ -57,7 +57,10 @@ export function useLazorkitCustomSigner() {
             const readConnection = new Connection(connection.rpcEndpoint, 'processed');
             const lazorkitClient = new LazorkitClient(readConnection);
 
-            const paymasterUrl = config.paymasterUrl || process.env.NEXT_PUBLIC_LAZORKIT_PAYMASTER_URL || 'https://kora.devnet.lazorkit.com';
+            const defaultPaymasterUrl = typeof window !== 'undefined'
+                ? `${window.location.origin}/api/lazorkit-paymaster`
+                : 'https://kora.devnet.lazorkit.com';
+            const paymasterUrl = config.paymasterUrl || process.env.NEXT_PUBLIC_LAZORKIT_PAYMASTER_URL || defaultPaymasterUrl;
             console.log('[LazorKit] Using Paymaster URL:', paymasterUrl);
             const paymaster = new Paymaster({
                 paymasterUrl

@@ -48,6 +48,36 @@ interface TransferModalProps {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
 
+/** Record a completed transfer in the backend for history & handle-user matching */
+async function recordTransfer(params: {
+    hash: string;
+    chainType: 'evm' | 'svm';
+    chainId: number;
+    from: string;
+    to: string;
+    tokenSymbol: string;
+    tokenAddress: string;
+    tokenDecimals: number;
+    amount: string;
+    walletType: 'spot' | 'money';
+    category?: string;
+}) {
+    try {
+        const token = localStorage.getItem('accessToken');
+        if (!token) return;
+        await fetch(`${API_BASE}/transactions/record`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(params),
+        });
+    } catch (e) {
+        console.warn('[TransferModal] Failed to record transfer:', e);
+    }
+}
+
 export default function TransferModal({ isOpen, onClose, token, accessToken, walletType, defaultRecipient, defaultAmount }: TransferModalProps) {
     const [recipient, setRecipient] = useState('');
     const [amount, setAmount] = useState('');
@@ -175,7 +205,7 @@ export default function TransferModal({ isOpen, onClose, token, accessToken, wal
                         x: config.pubX,
                         y: config.pubY
                     },
-                    paymasterUrl: config.lazorkit?.paymasterUrl
+                    // paymasterUrl not passed — hook defaults to local proxy to avoid CORS
                 });
 
                 setStatus('Transaction Submitted! Confirming...');
@@ -185,6 +215,21 @@ export default function TransferModal({ isOpen, onClose, token, accessToken, wal
 
                 setSuccessHash(signature);
                 setStatus('Success!');
+
+                // Record transfer for history
+                recordTransfer({
+                    hash: signature,
+                    chainType: 'svm',
+                    chainId: token.chainId || 103,
+                    from: senderAddress,
+                    to: recipientValidation.address!.toBase58(),
+                    tokenSymbol: token.symbol,
+                    tokenAddress: token.address,
+                    tokenDecimals: token.decimals || 6,
+                    amount,
+                    walletType,
+                });
+
                 return; // Exit function after successful SVM transfer
             }
 
@@ -203,6 +248,24 @@ export default function TransferModal({ isOpen, onClose, token, accessToken, wal
 
             setSuccessHash(result.hash);
             setStatus('Success!');
+
+            // Record transfer for history
+            const wallets = JSON.parse(localStorage.getItem('wallets') || '{}');
+            const senderAddr = walletType === 'spot'
+                ? wallets.spot?.evm?.address
+                : wallets.money?.evm?.address;
+            recordTransfer({
+                hash: result.hash,
+                chainType: 'evm',
+                chainId: token.chainId || 11155111,
+                from: senderAddr || '',
+                to: recipient,
+                tokenSymbol: token.symbol,
+                tokenAddress: token.address,
+                tokenDecimals: token.decimals || 18,
+                amount,
+                walletType,
+            });
 
         } catch (err: any) {
             console.error('Transfer Error:', err);
