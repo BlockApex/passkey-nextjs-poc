@@ -2,8 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
+import { API_BASE, signedFetch } from '@/lib/api/signedFetch';
 
 /** Resolve avatar URL — prepend API_BASE if relative, use initial fallback on error */
 function resolveAvatarUrl(url: string): string {
@@ -73,14 +72,6 @@ interface RecentContact {
     totalTransactions: number;
 }
 
-function getAuthHeaders() {
-    const token = localStorage.getItem('accessToken');
-    return {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-    };
-}
-
 export default function PaymentRequestsPage() {
     const router = useRouter();
     const [tab, setTab] = useState<'requests' | 'create'>('requests');
@@ -127,8 +118,8 @@ export default function PaymentRequestsPage() {
         setPrLoading(true);
         try {
             const params = statusFilter ? `?status=${statusFilter}` : '';
-            const res = await fetch(`${API_BASE}/payment-requests${params}`, {
-                headers: getAuthHeaders(),
+            const res = await signedFetch(`/payment-requests${params}`, {
+                auth: true,
             });
             if (res.ok) {
                 setRequests(await res.json());
@@ -155,8 +146,8 @@ export default function PaymentRequestsPage() {
         const timeout = setTimeout(async () => {
             setSearching(true);
             try {
-                const res = await fetch(`${API_BASE}/onboarding/search-users?q=${encodeURIComponent(searchQuery)}`, {
-                    headers: getAuthHeaders(),
+                const res = await signedFetch(`/onboarding/search-users?q=${encodeURIComponent(searchQuery)}`, {
+                    auth: true,
                 });
                 if (res.ok) setSearchResults(await res.json());
             } catch (e) {
@@ -173,8 +164,8 @@ export default function PaymentRequestsPage() {
 
     const fetchRecentContacts = async () => {
         try {
-            const res = await fetch(`${API_BASE}/transactions/recent-contacts`, {
-                headers: getAuthHeaders(),
+            const res = await signedFetch('/transactions/recent-contacts', {
+                auth: true,
             });
             if (res.ok) setRecentContacts(await res.json());
         } catch (e) {
@@ -186,8 +177,8 @@ export default function PaymentRequestsPage() {
 
     const selectUser = async (username: string) => {
         try {
-            const res = await fetch(`${API_BASE}/onboarding/user/${username}`, {
-                headers: getAuthHeaders(),
+            const res = await signedFetch(`/onboarding/user/${username}`, {
+                auth: true,
             });
             if (res.ok) {
                 const profile: UserProfile = await res.json();
@@ -221,10 +212,10 @@ export default function PaymentRequestsPage() {
         setCreateSuccess('');
 
         try {
-            const res = await fetch(`${API_BASE}/payment-requests`, {
+            const res = await signedFetch('/payment-requests', {
                 method: 'POST',
-                headers: getAuthHeaders(),
-                body: JSON.stringify({
+                auth: true,
+                json: {
                     senderUsername: selectedUser.username,
                     amount: createAmount,
                     tokenAddress: createTokenAddress,
@@ -234,7 +225,7 @@ export default function PaymentRequestsPage() {
                     chainType: createChainType,
                     receiverWalletAddress: myMoneyEvm,
                     note: createNote || undefined,
-                }),
+                },
             });
 
             if (!res.ok) {
@@ -259,9 +250,9 @@ export default function PaymentRequestsPage() {
     const handleDecline = async (prId: string) => {
         setActionLoading(prId);
         try {
-            const res = await fetch(`${API_BASE}/payment-requests/${prId}/decline`, {
+            const res = await signedFetch(`/payment-requests/${prId}/decline`, {
                 method: 'PATCH',
-                headers: getAuthHeaders(),
+                auth: true,
             });
             if (res.ok) fetchPaymentRequests();
         } catch (e) {
@@ -284,10 +275,10 @@ export default function PaymentRequestsPage() {
                 return;
             }
 
-            const res = await fetch(`${API_BASE}/payment-requests/${pr._id}/approve`, {
+            const res = await signedFetch(`/payment-requests/${pr._id}/approve`, {
                 method: 'PATCH',
-                headers: getAuthHeaders(),
-                body: JSON.stringify({ txHash }),
+                auth: true,
+                json: { txHash },
             });
             if (res.ok) fetchPaymentRequests();
         } catch (e) {

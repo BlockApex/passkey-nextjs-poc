@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { signedFetch } from '@/lib/api/signedFetch';
 
 interface OfframpModalProps {
     isOpen: boolean;
@@ -40,7 +41,7 @@ const DEST_RAIL_MAP: Record<string, string> = {
 
 const getDestRail = (currency: string) => DEST_RAIL_MAP[currency] || 'LOCAL';
 
-export default function OfframpModal({ isOpen, onClose, token, accessToken }: OfframpModalProps) {
+export default function OfframpModal({ isOpen, onClose, token }: OfframpModalProps) {
     const [step, setStep] = useState<Step>('check');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -113,13 +114,6 @@ export default function OfframpModal({ isOpen, onClose, token, accessToken }: Of
     const [fundingInstructions, setFundingInstructions] = useState<any>(null);
     const [paymentId, setPaymentId] = useState('');
 
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
-
-    const headers = {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-    };
-
     useEffect(() => {
         if (isOpen && token) {
             checkCustomerStatus();
@@ -149,7 +143,7 @@ export default function OfframpModal({ isOpen, onClose, token, accessToken }: Of
         setLoading(true);
         setError('');
         try {
-            const res = await fetch(`${apiUrl}/offramp/customer/status`, { headers });
+            const res = await signedFetch('/offramp/customer/status', { auth: true });
             if (!res.ok) throw new Error('Failed to check status');
             const data = await res.json();
 
@@ -198,10 +192,10 @@ export default function OfframpModal({ isOpen, onClose, token, accessToken }: Of
         setLoading(true);
         setError('');
         try {
-            const res = await fetch(`${apiUrl}/offramp/customer`, {
+            const res = await signedFetch('/offramp/customer', {
                 method: 'POST',
-                headers,
-                body: JSON.stringify({
+                auth: true,
+                json: {
                     firstName: regForm.firstName,
                     lastName: regForm.lastName,
                     email: regForm.email,
@@ -220,7 +214,7 @@ export default function OfframpModal({ isOpen, onClose, token, accessToken }: Of
                         countryCode: regForm.idCountry,
                         frontImage: idFrontImage,
                     },
-                }),
+                },
             });
             if (!res.ok) {
                 const data = await res.json();
@@ -247,7 +241,7 @@ export default function OfframpModal({ isOpen, onClose, token, accessToken }: Of
     // ==========================================
     const fetchBankAccounts = async () => {
         try {
-            const res = await fetch(`${apiUrl}/offramp/bank-accounts`, { headers });
+            const res = await signedFetch('/offramp/bank-accounts', { auth: true });
             if (res.ok) {
                 const data = await res.json();
                 setBankAccounts(data);
@@ -264,10 +258,10 @@ export default function OfframpModal({ isOpen, onClose, token, accessToken }: Of
         setLoading(true);
         setError('');
         try {
-            const res = await fetch(`${apiUrl}/offramp/bank-account`, {
+            const res = await signedFetch('/offramp/bank-account', {
                 method: 'POST',
-                headers,
-                body: JSON.stringify({
+                auth: true,
+                json: {
                     currencyCode: bankForm.currencyCode,
                     isThirdParty: false,
                     bank: {
@@ -298,7 +292,7 @@ export default function OfframpModal({ isOpen, onClose, token, accessToken }: Of
                         },
                     },
                     label: bankForm.label,
-                }),
+                },
             });
             if (!res.ok) {
                 const data = await res.json();
@@ -322,9 +316,9 @@ export default function OfframpModal({ isOpen, onClose, token, accessToken }: Of
         setError('');
         try {
             const rail = token?.type === 'svm' ? 'SOLANA' : (CHAIN_RAIL_MAP[token?.chainId || 0] || 'POLYGON');
-            const res = await fetch(
-                `${apiUrl}/offramp/rate?sourceCurrency=${token?.symbol}&destinationCurrency=${destCurrency}&amount=${amount}&sourceRail=${rail}&destinationRail=${getDestRail(destCurrency)}`,
-                { headers }
+            const res = await signedFetch(
+                `/offramp/rate?sourceCurrency=${token?.symbol}&destinationCurrency=${destCurrency}&amount=${amount}&sourceRail=${rail}&destinationRail=${getDestRail(destCurrency)}`,
+                { auth: true },
             );
             if (res.ok) {
                 const data = await res.json();
@@ -362,10 +356,10 @@ export default function OfframpModal({ isOpen, onClose, token, accessToken }: Of
                 console.error('Error getting wallet address:', e);
             }
 
-            const res = await fetch(`${apiUrl}/offramp/payment`, {
+            const res = await signedFetch('/offramp/payment', {
                 method: 'POST',
-                headers,
-                body: JSON.stringify({
+                auth: true,
+                json: {
                     sourceCurrency: token?.symbol,
                     amount: parseFloat(amount),
                     sourceRail: rail,
@@ -373,7 +367,7 @@ export default function OfframpModal({ isOpen, onClose, token, accessToken }: Of
                     destinationCurrency: destCurrency,
                     destinationRail: getDestRail(destCurrency),
                     destinationAccountId: selectedBankId,
-                }),
+                },
             });
 
             if (!res.ok) {

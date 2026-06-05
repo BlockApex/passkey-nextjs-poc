@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import { signedFetch } from '@/lib/api/signedFetch';
 
 interface TransactionItem {
     _id: string;
@@ -109,7 +110,6 @@ export default function HistoryPage() {
                 return;
             }
 
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
             const params = new URLSearchParams();
             if (walletType) params.set('walletType', walletType);
             if (category) params.set('category', category);
@@ -118,8 +118,8 @@ export default function HistoryPage() {
             params.set('page', page.toString());
             params.set('limit', '20');
 
-            const res = await fetch(`${apiUrl}/transactions/history?${params}`, {
-                headers: { Authorization: `Bearer ${accessToken}` },
+            const res = await signedFetch(`/transactions/history?${params}`, {
+                auth: true,
             });
 
             if (!res.ok) throw new Error(`Failed to fetch history: ${res.status}`);

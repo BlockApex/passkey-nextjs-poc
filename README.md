@@ -28,17 +28,38 @@ npm install
 ```
 
 2. **Configure environment:**
-Create `.env.local`:
+Create `.env.local` (see `.env.example`):
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:3001/api/v1
+NEXT_PUBLIC_REQUEST_SIGNATURE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
 ```
 
-3. **Run development server:**
+3. **Configure request signing keys** (required — backend enforces `x-signature` on most routes):
+
+Generate a P-256 key pair:
+```bash
+openssl ecparam -name prime256v1 -genkey -noout -out request-signature-private.pem
+openssl ec -in request-signature-private.pem -pubout -out request-signature-public.pem
+```
+
+Set in `handle-pay-backend/.env`:
+```env
+REQUEST_SIGNATURE_PUBLIC_KEY="<contents of request-signature-public.pem>"
+```
+
+Set in `passkey-nextjs-poc/.env.local`:
+```env
+NEXT_PUBLIC_REQUEST_SIGNATURE_PRIVATE_KEY="<contents of request-signature-private.pem>"
+```
+
+Use `\n` escapes for newlines in `.env` files (same convention as the mobile app).
+
+4. **Run development server:**
 ```bash
 npm run dev
 ```
 
-4. **Open browser:**
+5. **Open browser:**
 ```
 http://localhost:3002
 ```
@@ -66,8 +87,9 @@ http://localhost:3002
 vercel --prod
 ```
 
-Set environment variable:
+Set environment variables:
 - `NEXT_PUBLIC_API_URL`: Your backend API URL
+- `NEXT_PUBLIC_REQUEST_SIGNATURE_PRIVATE_KEY`: PEM private key matching backend `REQUEST_SIGNATURE_PUBLIC_KEY`
 
 ## Backend
 

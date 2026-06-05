@@ -4,8 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 
 import { startRegistration } from '@simplewebauthn/browser';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001/api/v1';
+import { signedFetch } from '@/lib/api/signedFetch';
 
 export default function WalletTestPage() {
     // SVM State
@@ -28,10 +27,9 @@ export default function WalletTestPage() {
 
         try {
             // 1. Get Login Options
-            const optsRes = await fetch(`${API_BASE}/auth/passkey/login/options`, {
+            const optsRes = await signedFetch('/auth/passkey/login/options', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username: loginUsername })
+                json: { username: loginUsername },
             });
 
             if (!optsRes.ok) {
@@ -47,13 +45,12 @@ export default function WalletTestPage() {
 
             // 3. Verify Login & Get Wallet Data
             setSvmStep('Verifying...');
-            const verifyRes = await fetch(`${API_BASE}/auth/passkey/login/verify`, {
+            const verifyRes = await signedFetch('/auth/passkey/login/verify', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                json: {
                     username: loginUsername,
-                    credential: authResp
-                })
+                    credential: authResp,
+                },
             });
 
             if (!verifyRes.ok) throw new Error('Failed to verify login');
@@ -88,7 +85,7 @@ export default function WalletTestPage() {
         try {
             // 0. Fetch Usecase ID (Required for reservation)
             setSvmStep('Fetching usecases...');
-            const usecasesRes = await fetch(`${API_BASE}/onboarding/usecases`);
+            const usecasesRes = await signedFetch('/onboarding/usecases');
             if (!usecasesRes.ok) throw new Error('Failed to fetch usecases');
             const usecases = await usecasesRes.json();
             if (!usecases || usecases.length === 0) throw new Error('No usecases found');
@@ -96,13 +93,12 @@ export default function WalletTestPage() {
 
             // 1. Reserve Username (Simulated for test)
             setSvmStep('Reserving username...');
-            const reserveRes = await fetch(`${API_BASE}/onboarding/reserve-username`, {
+            const reserveRes = await signedFetch('/onboarding/reserve-username', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                json: {
                     username: svmUsername,
-                    usecaseId: usecaseId
-                })
+                    usecaseId: usecaseId,
+                },
             });
             if (!reserveRes.ok) {
                 const errData = await reserveRes.json();
@@ -112,10 +108,9 @@ export default function WalletTestPage() {
 
             // 2. Get Registration Options
             setSvmStep('Getting options...');
-            const optsRes = await fetch(`${API_BASE}/auth/passkey/register/options`, {
+            const optsRes = await signedFetch('/auth/passkey/register/options', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ reservationToken })
+                json: { reservationToken },
             });
             if (!optsRes.ok) throw new Error('Failed to get options');
             const options = await optsRes.json();
@@ -126,14 +121,13 @@ export default function WalletTestPage() {
 
             // 4. Verify & Get Wallet
             setSvmStep('Verifying...');
-            const verifyRes = await fetch(`${API_BASE}/auth/passkey/register/verify`, {
+            const verifyRes = await signedFetch('/auth/passkey/register/verify', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                json: {
                     reservationToken,
                     credential: attResp,
-                    deviceInfo: { platform: 'web', userAgent: navigator.userAgent }
-                })
+                    deviceInfo: { platform: 'web', userAgent: navigator.userAgent },
+                },
             });
             if (!verifyRes.ok) throw new Error('Failed to verify passkey');
             const verifyData = await verifyRes.json();

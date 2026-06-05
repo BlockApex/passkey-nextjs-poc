@@ -3,6 +3,7 @@ import { useLazorkitCustomSigner } from '@/hooks/useLazorkitCustomSigner';
 import { useRhinestoneTransfer } from '@/hooks/useRhinestoneTransfer';
 import { getConnection, buildUsdcTransferInstructions, createTransferSuccessMessage, validateRecipientAddress, validateTransferAmount, getUsdcBalance } from '@/lib/solana-utils';
 import { PublicKey } from '@solana/web3.js';
+import { signedFetch } from '@/lib/api/signedFetch';
 
 /** Get the explorer URL for a given chain ID */
 function getExplorerTxUrl(chainId: number | undefined, hash: string): string {
@@ -46,8 +47,6 @@ interface TransferModalProps {
     defaultAmount?: string;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
-
 /** Record a completed transfer in the backend for history & handle-user matching */
 async function recordTransfer(params: {
     hash: string;
@@ -63,15 +62,10 @@ async function recordTransfer(params: {
     category?: string;
 }) {
     try {
-        const token = localStorage.getItem('accessToken');
-        if (!token) return;
-        await fetch(`${API_BASE}/transactions/record`, {
+        await signedFetch('/transactions/record', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify(params),
+            auth: true,
+            json: params,
         });
     } catch (e) {
         console.warn('[TransferModal] Failed to record transfer:', e);
@@ -144,11 +138,9 @@ export default function TransferModal({ isOpen, onClose, token, accessToken, wal
                 if (isNaN(amountNum) || amountNum <= 0) throw new Error("Invalid amount");
 
                 // Fetch Wallet Config to get Credential ID and Public Key
-                const configRes = await fetch(`${API_BASE}/wallet/config`, {
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`,
-                        'ngrok-skip-browser-warning': 'true'
-                    }
+                const configRes = await signedFetch('/wallet/config', {
+                    auth: true,
+                    headers: { 'ngrok-skip-browser-warning': 'true' },
                 });
 
                 if (!configRes.ok) throw new Error('Failed to fetch wallet config');

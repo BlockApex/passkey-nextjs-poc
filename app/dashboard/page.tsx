@@ -6,6 +6,7 @@ import TransferModal from './components/TransferModal';
 import OfframpModal from './components/OfframpModal';
 // TransactionHistoryList removed — history is now a dedicated page at /dashboard/history
 import { useDepositRegistration } from '@/hooks/useDepositRegistration';
+import { signedFetch } from '@/lib/api/signedFetch';
 
 interface ChainBreakdown {
     chainId: number;
@@ -100,21 +101,15 @@ export default function DashboardPage() {
             return;
         }
         setAccessToken(token);
-        fetchAllBalances(token);
+        fetchAllBalances();
     }, []);
 
-    const fetchAllBalances = async (token: string) => {
+    const fetchAllBalances = async () => {
         setLoading(true);
         try {
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
-
             const [spotRes, moneyRes] = await Promise.all([
-                fetch(`${apiUrl}/transactions/balances?walletType=spot`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                }),
-                fetch(`${apiUrl}/transactions/balances?walletType=money`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                }),
+                signedFetch('/transactions/balances?walletType=spot', { auth: true }),
+                signedFetch('/transactions/balances?walletType=money', { auth: true }),
             ]);
 
             if (spotRes.status === 401 || moneyRes.status === 401) {
@@ -127,7 +122,7 @@ export default function DashboardPage() {
             if (moneyRes.ok) setMoneyPortfolio(await moneyRes.json());
 
             // Also fetch unclaimed tokens
-            fetchUnclaimedTokens(token);
+            fetchUnclaimedTokens();
         } catch (err: any) {
             setError(err.message);
         } finally {
@@ -135,12 +130,12 @@ export default function DashboardPage() {
         }
     };
 
-    const fetchUnclaimedTokens = async (token: string) => {
+    const fetchUnclaimedTokens = async () => {
         setUnclaimedLoading(true);
         try {
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
-            const res = await fetch(`${apiUrl}/transactions/unclaimed`, {
-                headers: { 'Authorization': `Bearer ${token}`, 'ngrok-skip-browser-warning': 'true' }
+            const res = await signedFetch('/transactions/unclaimed', {
+                auth: true,
+                headers: { 'ngrok-skip-browser-warning': 'true' },
             });
             if (res.ok) setUnclaimedTokens(await res.json());
         } catch (err) {
@@ -244,8 +239,7 @@ export default function DashboardPage() {
                         <button
                             onClick={() => {
                                 setLoading(true);
-                                const token = localStorage.getItem('accessToken');
-                                if (token) fetchAllBalances(token);
+                                if (localStorage.getItem('accessToken')) fetchAllBalances();
                             }}
                             disabled={loading}
                             className="text-emerald-600 hover:text-emerald-700 font-medium flex items-center gap-2 disabled:opacity-50"

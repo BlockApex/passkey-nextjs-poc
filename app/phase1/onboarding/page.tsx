@@ -2,8 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
+import { API_BASE, signedFetch } from '@/lib/api/signedFetch';
 
 interface Usecase {
     id: string;
@@ -47,7 +46,7 @@ export default function OnboardingPage() {
 
     const loadUsecases = async () => {
         try {
-            const response = await fetch(`${API_BASE}/onboarding/usecases`, {
+            const response = await signedFetch('/onboarding/usecases', {
                 headers: { 'ngrok-skip-browser-warning': 'true' },
             });
 
@@ -77,13 +76,10 @@ export default function OnboardingPage() {
         setAlternatives([]);
 
         try {
-            const response = await fetch(`${API_BASE}/onboarding/check-username`, {
+            const response = await signedFetch('/onboarding/check-username', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': 'true',
-                },
-                body: JSON.stringify({ username }),
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+                json: { username },
             });
 
             const result = await response.json();
@@ -104,16 +100,13 @@ export default function OnboardingPage() {
         setReserving(true);
 
         try {
-            const response = await fetch(`${API_BASE}/onboarding/reserve-username`, {
+            const response = await signedFetch('/onboarding/reserve-username', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': 'true',
-                },
-                body: JSON.stringify({
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+                json: {
                     username,
                     usecaseId: selectedUsecase.id,
-                }),
+                },
             });
 
             if (!response.ok) {

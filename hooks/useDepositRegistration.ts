@@ -1,24 +1,10 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { RhinestoneSDK, type Session } from '@rhinestone/sdk';
-import { toViewOnlyAccount } from '@rhinestone/sdk/utils';
+import { RhinestoneSDK } from '@rhinestone/sdk';
 import { toWebAuthnAccount } from 'viem/account-abstraction';
-import type { Hex, Chain, Address } from 'viem';
-import * as viemChains from 'viem/chains';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
-
-/** Rhinestone's fixed deposit service session signer (AWS KMS) */
-const RHINESTONE_SIGNER_ADDRESS = '0x177bfcdd15bc01e99013dcc5d2b09cd87a18ce9c' as Address;
-
-/** Plasma testnet USDT0 address */
-const PLASMA_TESTNET_USDT0 = '0x502012b361aebce43b26ec812b74d9a51db4d412' as Address;
-/** Plasma mainnet USDT0 address */
-const PLASMA_MAINNET_USDT0 = '0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb' as Address;
-
-/** Money wallet salt — must match backend derivation */
-const MONEY_WALLET_SALT = '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex;
+import type { Hex } from 'viem';
+import { API_V2_BASE, signedFetch } from '@/lib/api/signedFetch';
 
 /** Get the Rhinestone SDK endpoint URL — uses our API proxy */
 function getRhinestoneEndpoint(): string {
@@ -26,76 +12,109 @@ function getRhinestoneEndpoint(): string {
     return `${origin}/api/orchestrator`;
 }
 
+interface PrepareAlreadyRegistered {
+    status: 'already_registered';
+    address: string;
+    evmDepositAddress?: string;
+    solanaDepositAddress?: string;
+}
+
+interface PreparePendingSignature {
+    status: 'pending_signature';
+    prepareId: string;
+    address: string;
+    rpId: string;
+    moneyWalletSalt: string;
+    sessionDetails: {
+        nonces: string[];
+        hashesAndChainIds: { chainId: string; sessionDigest: string }[];
+        data: Record<string, unknown>;
+    };
+    expiresIn: number;
+}
+
+type PrepareResponse = PrepareAlreadyRegistered | PreparePendingSignature;
+
+interface CompleteResponse {
+    message: string;
+    address: string;
+    evmDepositAddress?: string;
+    solanaDepositAddress?: string;
+}
+
 /**
- * Hook for registering a Money Wallet with Rhinestone's deposit service.
+ * Hook for registering a Money Wallet with Rhinestone's deposit service (v2 API).
  *
  * Flow:
- * 1. Fetch wallet config (credentialId, pubX, pubY) from backend
- * 2. Build WebAuthn account + Rhinestone account with sessions enabled
- * 3. Get session details for all source chains + target chain
- * 4. Sign session grant with passkey (biometric prompt)
- * 5. Send signed session + initData to backend
- * 6. Backend forwards to Rhinestone deposit processor
- *
- * After registration, any stablecoins sent to the user's Nexus address
- * on any supported chain will auto-bridge to USDT0 on Plasma.
- * Registration also returns a Solana deposit address for 1-click Solana deposits.
+ * 1. POST /api/v2/deposit/register/prepare — backend resolves config and session digests
+ * 2. Client signs session grant with passkey (biometric prompt)
+ * 3. POST /api/v2/deposit/register/complete — backend registers with Rhinestone
  */
 export function useDepositRegistration() {
     const [isRegistering, setIsRegistering] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    /**
-     * Register the user's Money Wallet for auto-deposits.
-     * Triggers a passkey biometric prompt (one-time).
-     * Network (testnet/mainnet) is controlled by NEXT_PUBLIC_USE_TESTNET env var.
-     *
-     * @param accessToken - JWT access token
-     * @returns Object with message, address, evmDepositAddress, and solanaDepositAddress
-     */
     const registerForDeposits = useCallback(async (
         accessToken: string,
-    ): Promise<{ message: string; address: string; evmDepositAddress?: string; solanaDepositAddress?: string }> => {
-        const useTestnet = process.env.NEXT_PUBLIC_USE_TESTNET !== 'false';
+    ): Promise<CompleteResponse> => {
         setIsRegistering(true);
         setError(null);
 
         try {
-            // 1. Fetch wallet config from backend
-            const configRes = await fetch(`${API_BASE}/wallet/config`, {
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`,
-                    'ngrok-skip-browser-warning': 'true',
-                },
+            // 1. Prepare — backend resolves chains, tokens, session digests
+            const prepareRes = await signedFetch('/deposit/register/prepare', {
+                method: 'POST',
+                apiBase: API_V2_BASE,
+                auth: true,
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+            });
+
+            if (!prepareRes.ok) {
+                const errData = await prepareRes.text();
+                throw new Error(`Prepare failed: ${prepareRes.status} ${errData}`);
+            }
+
+            const prepare: PrepareResponse = await prepareRes.json();
+            console.log('[deposit-reg] Prepare response:', prepare);
+
+            if (prepare.status === 'already_registered') {
+                return {
+                    message: 'Already registered',
+                    address: prepare.address,
+                    evmDepositAddress: prepare.evmDepositAddress,
+                    solanaDepositAddress: prepare.solanaDepositAddress,
+                };
+            }
+
+            // 2. Fetch credential for passkey signing
+            const configRes = await signedFetch('/wallet/config', {
+                auth: true,
+                headers: { 'ngrok-skip-browser-warning': 'true' },
             });
             if (!configRes.ok) throw new Error('Failed to fetch wallet config');
             const config = await configRes.json();
 
-            // 2. Build uncompressed P256 public key
             const xHex = config.pubX.replace('0x', '').padStart(64, '0');
             const yHex = config.pubY.replace('0x', '').padStart(64, '0');
             const uncompressedPubKey = ('0x04' + xHex + yHex) as Hex;
 
-            // 3. Create WebAuthn account (uses browser's navigator.credentials.get for signing)
             const passkeyAccount = toWebAuthnAccount({
                 credential: {
                     id: config.credentialId,
                     publicKey: uncompressedPubKey,
                 },
-                rpId: window.location.hostname,
+                rpId: prepare.rpId,
             });
 
-            // 4. Create Rhinestone SDK with proxy endpoint
             const rhinestone = new RhinestoneSDK({
                 apiKey: 'proxy',
                 endpointUrl: getRhinestoneEndpoint(),
             });
 
-            // 5. Create account with sessions enabled (Money Wallet uses salt)
             const rhinestoneAccount = await rhinestone.createAccount({
                 account: {
                     type: 'nexus',
-                    salt: MONEY_WALLET_SALT,
+                    salt: prepare.moneyWalletSalt as Hex,
                 },
                 owners: {
                     type: 'passkey',
@@ -106,86 +125,51 @@ export function useDepositRegistration() {
                 },
             });
 
-            const address = rhinestoneAccount.getAddress();
-            const { factory, factoryData } = rhinestoneAccount.getInitData();
+            const derivedAddress = rhinestoneAccount.getAddress();
+            if (derivedAddress.toLowerCase() !== prepare.address.toLowerCase()) {
+                throw new Error(
+                    `Address mismatch after prepare: expected ${prepare.address}, got ${derivedAddress}`,
+                );
+            }
 
-            console.log(`[deposit-reg] Account address: ${address}`);
-            console.log(`[deposit-reg] Factory: ${factory}`);
+            // 3. Sign session grant with passkey (biometric prompt)
+            const sessionDetailsForSign = {
+                nonces: prepare.sessionDetails.nonces.map((n) => BigInt(n)),
+                hashesAndChainIds: prepare.sessionDetails.hashesAndChainIds.map((h) => ({
+                    chainId: BigInt(h.chainId),
+                    sessionDigest: h.sessionDigest as Hex,
+                })),
+                data: prepare.sessionDetails.data,
+            };
 
-            // 6. Build session signer (Rhinestone's KMS address)
-            const sessionSignerAccount = toViewOnlyAccount(RHINESTONE_SIGNER_ADDRESS);
+            const signature =
+                await rhinestoneAccount.experimental_signEnableSession(
+                    sessionDetailsForSign as Parameters<
+                        typeof rhinestoneAccount.experimental_signEnableSession
+                    >[0],
+                );
 
-            // 7. Determine chains
-            const targetChain: Chain = useTestnet ? viemChains.plasmaTestnet : viemChains.plasma;
-            const targetToken = useTestnet ? PLASMA_TESTNET_USDT0 : PLASMA_MAINNET_USDT0;
+            console.log('[deposit-reg] Session signed successfully');
 
-            // Source chains — chains where users might receive stablecoins
-            const sourceChains: Chain[] = useTestnet
-                ? [viemChains.sepolia, viemChains.baseSepolia, viemChains.optimismSepolia, viemChains.arbitrumSepolia]
-                : [viemChains.mainnet, viemChains.base, viemChains.optimism, viemChains.arbitrum];
-
-            // All unique chains = source + target
-            const allChains = [...new Set([...sourceChains, targetChain])];
-
-            console.log(`[deposit-reg] Preparing sessions for ${allChains.length} chains: ${allChains.map(c => c.name).join(', ')}`);
-
-            // 8. Build sessions for each chain
-            const sessions: Session[] = allChains.map((chain) => ({
-                owners: {
-                    type: 'ecdsa' as const,
-                    accounts: [sessionSignerAccount],
-                },
-                chain,
-            }));
-
-            // 9. Get session digests from Rhinestone SDK
-            const sessionDetails = await rhinestoneAccount.experimental_getSessionDetails(sessions);
-
-            console.log(`[deposit-reg] Got session details for ${sessionDetails.hashesAndChainIds.length} chains`);
-
-            // 10. Sign the session grant with the user's passkey (biometric prompt!)
-            const enableSignature = await rhinestoneAccount.experimental_signEnableSession(sessionDetails);
-
-            console.log(`[deposit-reg] Session signed successfully`);
-
-            // 11. Send to backend for registration with deposit processor
-            const registerRes = await fetch(`${API_BASE}/deposit/register`, {
+            // 4. Complete registration
+            const completeRes = await signedFetch('/deposit/register/complete', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${accessToken}`,
-                    'ngrok-skip-browser-warning': 'true',
+                apiBase: API_V2_BASE,
+                auth: true,
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+                json: {
+                    prepareId: prepare.prepareId,
+                    signature,
                 },
-                body: JSON.stringify({
-                    address,
-                    factory,
-                    factoryData,
-                    sessionDetails: {
-                        hashesAndChainIds: sessionDetails.hashesAndChainIds.map(h => ({
-                            chainId: h.chainId.toString(),
-                            sessionDigest: h.sessionDigest,
-                        })),
-                        signature: enableSignature,
-                    },
-                    targetChainId: targetChain.id,
-                    targetToken,
-                }, (_, v) => typeof v === 'bigint' ? v.toString() : v),
             });
 
-            if (!registerRes.ok) {
-                const errData = await registerRes.text();
-                throw new Error(`Registration failed: ${registerRes.status} ${errData}`);
+            if (!completeRes.ok) {
+                const errData = await completeRes.text();
+                throw new Error(`Registration failed: ${completeRes.status} ${errData}`);
             }
 
-            const result = await registerRes.json();
-            console.log(`[deposit-reg] Registration complete:`, result);
-            if (result.solanaDepositAddress) {
-                console.log(`[deposit-reg] Solana deposit address: ${result.solanaDepositAddress}`);
-            }
-            if (result.evmDepositAddress) {
-                console.log(`[deposit-reg] EVM deposit address: ${result.evmDepositAddress}`);
-            }
-
+            const result: CompleteResponse = await completeRes.json();
+            console.log('[deposit-reg] Registration complete:', result);
             return result;
         } catch (err: any) {
             const message = err?.message || 'Deposit registration failed';

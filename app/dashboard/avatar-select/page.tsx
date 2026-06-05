@@ -2,8 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
+import { API_BASE, signedFetch } from '@/lib/api/signedFetch';
 
 interface CuratedAvatar {
     _id: string;
@@ -34,7 +33,7 @@ export default function AvatarSelectPage() {
     const fetchAvatars = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`${API_BASE}/avatar/curated`);
+            const res = await signedFetch('/avatar/curated');
             if (res.ok) setAvatars(await res.json());
         } catch (e) {
             console.error('Failed to fetch avatars', e);
@@ -50,14 +49,10 @@ export default function AvatarSelectPage() {
         setSuccess('');
 
         try {
-            const token = localStorage.getItem('accessToken');
-            const res = await fetch(`${API_BASE}/onboarding/avatar`, {
+            const res = await signedFetch('/onboarding/avatar', {
                 method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`,
-                },
-                body: JSON.stringify({ avatarId: selectedId }),
+                auth: true,
+                json: { avatarId: selectedId },
             });
 
             if (!res.ok) {

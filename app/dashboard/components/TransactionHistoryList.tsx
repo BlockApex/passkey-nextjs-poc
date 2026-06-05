@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { signedFetch } from '@/lib/api/signedFetch';
 
 interface HistoryItem {
     chain: string;
@@ -43,7 +44,6 @@ export default function TransactionHistoryList({ chains, accessToken }: Transact
     const fetchAllHistory = async () => {
         setLoading(true);
         try {
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
             const allPromises = chains.map(async (chain) => {
                 // Determine 'network' param
                 // For SVM: 'devnet' or nothing (mainnet)
@@ -52,8 +52,8 @@ export default function TransactionHistoryList({ chains, accessToken }: Transact
 
                 const query = `chainType=${chain.type}&network=${networkParam}&address=${chain.address}`;
 
-                const res = await fetch(`${apiUrl}/transactions/history?${query}`, {
-                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                const res = await signedFetch(`/transactions/history?${query}`, {
+                    auth: true,
                 });
 
                 if (!res.ok) return []; // Ignore failed chains individually

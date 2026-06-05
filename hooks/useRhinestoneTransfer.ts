@@ -12,13 +12,12 @@ import {
 } from 'viem';
 import * as viemChains from 'viem/chains';
 import { plasma, plasmaTestnet, PLASMA_USDT0_ADDRESS } from '@/lib/chains/plasma';
+import { signedFetch } from '@/lib/api/signedFetch';
 
 /** Check if a chain ID is a Plasma chain */
 function isPlasmaChain(chainId: number): boolean {
     return chainId === plasma.id || chainId === plasmaTestnet.id;
 }
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
 
 /**
  * Safely convert a tx hash value (BigInt, number, or string) to a 0x-prefixed hex string.
@@ -94,11 +93,9 @@ export function useRhinestoneTransfer() {
         walletType: 'spot' | 'money',
     ) => {
         // 1. Fetch wallet config from backend
-        const configRes = await fetch(`${API_BASE}/wallet/config`, {
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'ngrok-skip-browser-warning': 'true',
-            },
+        const configRes = await signedFetch('/wallet/config', {
+            auth: true,
+            headers: { 'ngrok-skip-browser-warning': 'true' },
         });
         if (!configRes.ok) throw new Error('Failed to fetch wallet config');
         const config = await configRes.json();

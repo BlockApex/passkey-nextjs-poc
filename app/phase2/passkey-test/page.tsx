@@ -4,9 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
-
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
+import { signedFetch } from '@/lib/api/signedFetch';
 
 export default function PasskeyRegistrationPage() {
     const router = useRouter();
@@ -33,13 +31,10 @@ export default function PasskeyRegistrationPage() {
 
         try {
             // Step 1: Get registration options from backend
-            const optionsRes = await fetch(`${API_BASE}/auth/passkey/register/options`, {
+            const optionsRes = await signedFetch('/auth/passkey/register/options', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': 'true',
-                },
-                body: JSON.stringify({ reservationToken }),
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+                json: { reservationToken },
             });
 
             if (!optionsRes.ok) {
@@ -57,13 +52,10 @@ export default function PasskeyRegistrationPage() {
 
 
             // Step 3: Send credential to backend for verification
-            const verifyRes = await fetch(`${API_BASE}/auth/passkey/register/verify`, {
+            const verifyRes = await signedFetch('/auth/passkey/register/verify', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': 'true',
-                },
-                body: JSON.stringify({
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+                json: {
                     reservationToken,
                     credential: attResp,
                     deviceInfo: {
@@ -71,7 +63,7 @@ export default function PasskeyRegistrationPage() {
                         platform: 'web',
                         deviceName: 'Browser',
                     },
-                }),
+                },
             });
 
             if (!verifyRes.ok) {
@@ -128,13 +120,10 @@ export default function PasskeyRegistrationPage() {
             const payload = useUsername ? { username } : {};
 
             // Step 1: Get login options
-            const optionsRes = await fetch(`${API_BASE}/auth/passkey/login/options`, {
+            const optionsRes = await signedFetch('/auth/passkey/login/options', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': 'true',
-                },
-                body: JSON.stringify(payload),
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+                json: payload,
             });
 
             if (!optionsRes.ok) {
@@ -154,13 +143,10 @@ export default function PasskeyRegistrationPage() {
                 ? { username, credential: asseResp }
                 : { credential: asseResp };
 
-            const verifyRes = await fetch(`${API_BASE}/auth/passkey/login/verify`, {
+            const verifyRes = await signedFetch('/auth/passkey/login/verify', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'ngrok-skip-browser-warning': 'true',
-                },
-                body: JSON.stringify(verifyPayload),
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+                json: verifyPayload,
             });
 
             if (!verifyRes.ok) {
