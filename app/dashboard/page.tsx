@@ -67,6 +67,9 @@ export default function DashboardPage() {
     const [unclaimedLoading, setUnclaimedLoading] = useState(false);
     const [claimRecipient, setClaimRecipient] = useState<string | undefined>(undefined);
     const [claimAmount, setClaimAmount] = useState<string | undefined>(undefined);
+    // True when the transfer modal is opened for a claim (Money→Spot). Forces the
+    // transfer source to the Money wallet and records via /transactions/claim.
+    const [isClaimMode, setIsClaimMode] = useState(false);
 
     // Parse wallet addresses from localStorage
     const walletAddresses = useMemo<WalletAddresses>(() => {
@@ -153,6 +156,9 @@ export default function DashboardPage() {
     };
 
     const openTransferModal = (asset: Asset, chain: ChainBreakdown) => {
+        setIsClaimMode(false);
+        setClaimRecipient(undefined);
+        setClaimAmount(undefined);
         setSelectedToken({
             symbol: asset.symbol,
             name: asset.name,
@@ -649,6 +655,7 @@ export default function DashboardPage() {
                                                                     const spotAddr = chain.type === 'evm'
                                                                         ? asset.claimTo?.evmAddress
                                                                         : asset.claimTo?.svmAddress;
+                                                                    setIsClaimMode(true);
                                                                     setClaimRecipient(spotAddr || '');
                                                                     setClaimAmount(chain.balance);
                                                                     setSelectedToken({
@@ -689,12 +696,13 @@ export default function DashboardPage() {
 
             <TransferModal
                 isOpen={isTransferModalOpen}
-                onClose={() => { setIsTransferModalOpen(false); setClaimRecipient(undefined); setClaimAmount(undefined); }}
+                onClose={() => { setIsTransferModalOpen(false); setClaimRecipient(undefined); setClaimAmount(undefined); setIsClaimMode(false); }}
                 token={selectedToken}
                 accessToken={localStorage.getItem('accessToken') || ''}
-                walletType={activeWallet}
+                walletType={isClaimMode ? 'money' : activeWallet}
                 defaultRecipient={claimRecipient}
                 defaultAmount={claimAmount}
+                isClaim={isClaimMode}
             />
 
             <OfframpModal
