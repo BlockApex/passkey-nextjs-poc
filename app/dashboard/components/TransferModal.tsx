@@ -271,6 +271,10 @@ export default function TransferModal({ isOpen, onClose, token, accessToken, wal
                 amount,
                 decimals: token.decimals || 18,
                 walletType,
+                // Claims (same-chain Money->Spot) go through Rhinestone's SPONSORED
+                // intent path — gasless via the sponsorship balance, no paymaster.
+                // (Earlier 422s were an unfunded balance, not a same-chain limitation.)
+                directUserOp: false,
             });
 
             setSuccessHash(result.hash);

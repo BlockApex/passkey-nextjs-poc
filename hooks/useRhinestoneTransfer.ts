@@ -133,6 +133,11 @@ export function useRhinestoneTransfer() {
                 type: 'nexus',
                 salt: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
             };
+            // CRITICAL: the backend derives the Money account with sessions
+            // enabled, and sessions change the CREATE2 address. Without this the
+            // SDK derives a DIFFERENT, unfunded account (confirmed w/ Rhinestone:
+            // the intent was built for the sessions-off address which had 0 funds).
+            accountConfig.experimental_sessions = { enabled: true };
         }
 
         const rhinestoneAccount = await rhinestone.createAccount(accountConfig);
@@ -154,6 +159,7 @@ export function useRhinestoneTransfer() {
         amount: string;       // Human-readable amount (e.g. "1.5")
         decimals: number;
         walletType: 'spot' | 'money';
+        directUserOp?: boolean; // same-chain (e.g. claims): bypass the cross-chain intents path
     }): Promise<TransferResult> => {
         setIsSending(true);
         setError(null);
@@ -190,10 +196,16 @@ export function useRhinestoneTransfer() {
                 args: [params.to as `0x${string}`, amountWei],
             });
 
-            if (isPlasmaChain(params.chainId)) {
-                // Plasma: use sendUserOperation (direct on-chain, bypasses orchestrator).
-                // USDT0 on Plasma is gasless at protocol level — no paymaster needed.
-                console.log('[Rhinestone] Plasma chain detected — using sendUserOperation (direct)');
+            if (isPlasmaChain(params.chainId) || params.directUserOp) {
+                // Direct on-chain user-op — bypasses the cross-chain orchestrator/intents.
+                // Used for Plasma (USDT0 is gasless) and for same-chain claims on other
+                // chains, where routing a same-chain move through the intents path fails
+                // (422 INSUFFICIENT_LIQUIDITY — see Rhinestone docs: "same-chain → use
+                // sendUserOperation"). On non-gasless chains the account pays gas from its
+                // own balance unless a paymaster is configured on the SDK.
+                console.log(
+                    `[Rhinestone] Direct user-op (${isPlasmaChain(params.chainId) ? 'Plasma' : 'same-chain'})`,
+                );
                 const userOpResult = await rhinestoneAccount.sendUserOperation({
                     chain,
                     calls: [{

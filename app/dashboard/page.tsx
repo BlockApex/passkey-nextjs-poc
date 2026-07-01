@@ -6,6 +6,8 @@ import TransferModal from './components/TransferModal';
 import OfframpModal from './components/OfframpModal';
 // TransactionHistoryList removed — history is now a dedicated page at /dashboard/history
 import { useDepositRegistration } from '@/hooks/useDepositRegistration';
+import { useSessionStatus } from '@/hooks/useSessionStatus';
+import { useExtendSession } from '@/hooks/useExtendSession';
 import { signedFetch } from '@/lib/api/signedFetch';
 
 interface ChainBreakdown {
@@ -61,6 +63,26 @@ export default function DashboardPage() {
     const [depositRegistered, setDepositRegistered] = useState(false);
     const [depositMessage, setDepositMessage] = useState<string | null>(null);
     const { registerForDeposits, isRegistering, error: depositError } = useDepositRegistration();
+    const { status: sessionStatus, refresh: refreshSessionStatus } = useSessionStatus();
+    const { extendSession, isExtending, error: extendError } = useExtendSession();
+    const [extendMessage, setExtendMessage] = useState<string | null>(null);
+
+    const handleExtendSession = async () => {
+        setExtendMessage(null);
+        try {
+            const result = await extendSession();
+            if (result) {
+                setExtendMessage(
+                    `Authorized chains: ${result.approvedChainIds.join(', ')}`,
+                );
+            } else {
+                setExtendMessage('No new chains to authorize');
+            }
+            await refreshSessionStatus();
+        } catch {
+            // useExtendSession already surfaces error via `extendError`
+        }
+    };
 
     // Unclaimed tokens state
     const [unclaimedTokens, setUnclaimedTokens] = useState<any>(null);
@@ -306,6 +328,42 @@ export default function DashboardPage() {
 
                 {error && <div className="bg-red-50 text-red-600 p-4 rounded-lg mb-6">{error}</div>}
 
+                {/* New-chain re-authorization banner. Shows only when the user is already
+                    registered AND one or more active EVM chains were added after their
+                    last session sign. One passkey signature covers all pending chains. */}
+                {sessionStatus?.needsAction && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 mb-6">
+                        <div className="flex items-start justify-between gap-4">
+                            <div className="flex-1">
+                                <h3 className="font-bold text-amber-900 mb-1">
+                                    New chains available — authorize to enable deposits
+                                </h3>
+                                <p className="text-sm text-amber-800">
+                                    {sessionStatus.pending.length === 1
+                                        ? `${sessionStatus.pending[0].name} was added after you set up your Money wallet. Sign once to start accepting deposits from it.`
+                                        : `${sessionStatus.pending.length} new chains were added after you set up your Money wallet. One signature authorizes them all.`}
+                                </p>
+                                <p className="text-xs text-amber-700 mt-2">
+                                    Pending: {sessionStatus.pending.map((c) => `${c.name} (${c.chainId})`).join(', ')}
+                                </p>
+                                {extendMessage && (
+                                    <p className="text-xs mt-2 text-emerald-700">{extendMessage}</p>
+                                )}
+                                {extendError && (
+                                    <p className="text-xs mt-2 text-red-600">{extendError}</p>
+                                )}
+                            </div>
+                            <button
+                                onClick={handleExtendSession}
+                                disabled={isExtending}
+                                className="px-5 py-2 bg-amber-600 text-white font-semibold rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                            >
+                                {isExtending ? 'Signing…' : 'Authorize'}
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 {/* Active Wallet Content */}
                 <div className="space-y-6">
                     {/* Balance Card */}
@@ -502,6 +560,75 @@ export default function DashboardPage() {
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
                                 </svg>
                                 Requests
+                            </button>
+                        )}
+                        {activeWallet === 'money' && walletAddresses.spotEvm && (
+                            <button
+                                onClick={() => {
+                                    setIsClaimMode(true);
+                                    setClaimRecipient(walletAddresses.spotEvm!);
+                                    setClaimAmount('0.4');
+                                    setSelectedToken({
+                                        symbol: 'USDbC',
+                                        name: 'USD Base Coin',
+                                        balance: '0.5',
+                                        decimals: 6,
+                                        address: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
+                                        chainId: 8453,
+                                        type: 'evm',
+                                    });
+                                    setIsTransferModalOpen(true);
+                                }}
+                                className="px-4 py-3 text-sm font-semibold text-white bg-fuchsia-600 hover:bg-fuchsia-700 rounded-lg transition"
+                                title="Sweep 0.4 USDbC (non-whitelisted) Money to Spot on Base via sponsored intent"
+                            >
+                                🧪 Sweep USDbC→Spot
+                            </button>
+                        )}
+                        {activeWallet === 'money' && walletAddresses.spotEvm && (
+                            <button
+                                onClick={() => {
+                                    setIsClaimMode(true);
+                                    setClaimRecipient(walletAddresses.spotEvm!);
+                                    setClaimAmount('0.8');
+                                    setSelectedToken({
+                                        symbol: 'DAI',
+                                        name: 'Dai Stablecoin',
+                                        balance: '1',
+                                        decimals: 18,
+                                        address: '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb',
+                                        chainId: 8453,
+                                        type: 'evm',
+                                    });
+                                    setIsTransferModalOpen(true);
+                                }}
+                                className="px-4 py-3 text-sm font-semibold text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition"
+                                title="Sweep 5 DAI (stocked, non-whitelisted) Money to Spot on Base"
+                            >
+                                🧪 Sweep DAI→Spot
+                            </button>
+                        )}
+                        {activeWallet === 'money' && walletAddresses.spotEvm && (
+                            <button
+                                onClick={() => {
+                                    setIsClaimMode(true);
+                                    setClaimRecipient(walletAddresses.spotEvm!);
+                                    setClaimAmount('0.002');
+                                    setSelectedToken({
+                                        symbol: 'WETH',
+                                        name: 'Wrapped Ether',
+                                        balance: '0.002',
+                                        decimals: 18,
+                                        address: '0x4200000000000000000000000000000000000006',
+                                        chainId: 8453,
+                                        type: 'evm',
+                                    });
+                                    setIsTransferModalOpen(true);
+                                }}
+                                className="px-4 py-3 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition"
+                                title="Sweep 0.002 WETH (stocked, non-whitelisted) Money to Spot on Base"
+                            >
+                                🧪 Sweep WETH→Spot
                             </button>
                         )}
                         <button

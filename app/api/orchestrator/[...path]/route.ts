@@ -117,8 +117,13 @@ async function handler(
 
         // Surface orchestrator failures (e.g. intent-operations 422) so we can see WHY.
         if (!response.ok) {
+            // Log ALL response headers so we can hand Rhinestone the trace/request id.
+            const respHeaders: Record<string, string> = {};
+            response.headers.forEach((v, k) => {
+                respHeaders[k] = v;
+            });
             console.error(
-                `[orchestrator] ${req.method} /${pathStr} -> ${response.status}: ${responseBody.slice(0, 1500)}`,
+                `[orchestrator] ${req.method} /${pathStr} -> ${response.status} HEADERS=${JSON.stringify(respHeaders)} BODY=${responseBody.slice(0, 1500)}`,
             );
         }
 
