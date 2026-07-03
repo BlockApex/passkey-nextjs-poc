@@ -11,7 +11,14 @@ interface TransactionItem {
     chainType: 'evm' | 'svm';
     chainId: number;
     direction: 'incoming' | 'outgoing';
-    status: 'confirmed' | 'pending' | 'failed';
+    status:
+    | 'initiated'
+    | 'pending'
+    | 'confirmed'
+    | 'settled'
+    | 'failed'
+    | 'cancelled'
+    | 'refunded';
     category: string;
     timestamp: string;
     from: string;
@@ -24,6 +31,9 @@ interface TransactionItem {
     };
     counterpartyUsername?: string;
     note?: string;
+    // Provided by the backend now: human decimal amount + chain-aware explorer link.
+    amountDecimal?: string;
+    explorerUrl?: string | null;
 }
 
 interface HistoryResponse {
@@ -59,6 +69,14 @@ const CHAIN_TYPES = [
     { value: 'svm', label: 'SVM' },
 ];
 
+const TYPES = [
+    { value: '', label: 'All Types' },
+    { value: 'received', label: 'Received' },
+    { value: 'sent', label: 'Sent' },
+    { value: 'withdraw', label: 'Withdraw' },
+    { value: 'deposit', label: 'Deposit' },
+];
+
 function getCategoryBadge(category: string) {
     const map: Record<string, { bg: string; text: string; label: string }> = {
         'on-chain-deposit': { bg: 'bg-blue-100', text: 'text-blue-700', label: 'Deposit' },
@@ -79,8 +97,8 @@ function getExplorerUrl(chainType: string, chainId: number, hash: string) {
     }
     const explorers: Record<number, string> = {
         11155111: `https://sepolia.etherscan.io/tx/${hash}`,
-        9745: `https://explorer.plasmachain.com/tx/${hash}`,
-        9746: `https://testnet.explorer.plasmachain.com/tx/${hash}`,
+        9745: `https://plasmascan.to/tx/${hash}`,
+        9746: `https://testnet.plasmascan.to/tx/${hash}`,
         8453: `https://basescan.org/tx/${hash}`,
         42161: `https://arbiscan.io/tx/${hash}`,
     };
@@ -96,8 +114,11 @@ export default function HistoryPage() {
     // Filters
     const [walletType, setWalletType] = useState('');
     const [category, setCategory] = useState('');
+    const [type, setType] = useState('');
     const [chainType, setChainType] = useState('');
     const [tokenSymbol, setTokenSymbol] = useState('');
+    const [fromDate, setFromDate] = useState('');
+    const [toDate, setToDate] = useState('');
     const [page, setPage] = useState(1);
 
     const fetchHistory = useCallback(async () => {
@@ -113,8 +134,11 @@ export default function HistoryPage() {
             const params = new URLSearchParams();
             if (walletType) params.set('walletType', walletType);
             if (category) params.set('category', category);
+            if (type) params.set('type', type);
             if (chainType) params.set('chainType', chainType);
             if (tokenSymbol) params.set('tokenSymbol', tokenSymbol);
+            if (fromDate) params.set('from', fromDate);
+            if (toDate) params.set('to', toDate);
             params.set('page', page.toString());
             params.set('limit', '20');
 
@@ -130,7 +154,7 @@ export default function HistoryPage() {
         } finally {
             setLoading(false);
         }
-    }, [walletType, category, chainType, tokenSymbol, page, router]);
+    }, [walletType, category, type, chainType, tokenSymbol, fromDate, toDate, page, router]);
 
     useEffect(() => {
         fetchHistory();
@@ -139,7 +163,7 @@ export default function HistoryPage() {
     // Reset page when filters change
     useEffect(() => {
         setPage(1);
-    }, [walletType, category, chainType, tokenSymbol]);
+    }, [walletType, category, type, chainType, tokenSymbol, fromDate, toDate]);
 
     return (
         <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100">
@@ -161,12 +185,21 @@ export default function HistoryPage() {
                 </div>
 
                 {/* Filters */}
-                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6 space-y-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        <select
+                            value={type}
+                            onChange={(e) => setType(e.target.value)}
+                            className="px-3 py-2 rounded-lg border border-slate-200 text-black text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
+                        >
+                            {TYPES.map((o) => (
+                                <option key={o.value} value={o.value}>{o.label}</option>
+                            ))}
+                        </select>
                         <select
                             value={walletType}
                             onChange={(e) => setWalletType(e.target.value)}
-                            className="px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
+                            className="px-3 py-2 rounded-lg border border-slate-200 text-black  text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
                         >
                             {WALLET_TYPES.map((o) => (
                                 <option key={o.value} value={o.value}>{o.label}</option>
@@ -175,7 +208,7 @@ export default function HistoryPage() {
                         <select
                             value={category}
                             onChange={(e) => setCategory(e.target.value)}
-                            className="px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
+                            className="px-3 py-2 rounded-lg border border-slate-200 text-black  text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
                         >
                             {CATEGORIES.map((o) => (
                                 <option key={o.value} value={o.value}>{o.label}</option>
@@ -184,7 +217,7 @@ export default function HistoryPage() {
                         <select
                             value={chainType}
                             onChange={(e) => setChainType(e.target.value)}
-                            className="px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
+                            className="px-3 py-2 rounded-lg border border-slate-200 text-black  text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
                         >
                             {CHAIN_TYPES.map((o) => (
                                 <option key={o.value} value={o.value}>{o.label}</option>
@@ -195,9 +228,41 @@ export default function HistoryPage() {
                             placeholder="Token (e.g. USDC)"
                             value={tokenSymbol}
                             onChange={(e) => setTokenSymbol(e.target.value)}
-                            className="px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
+                            className="px-3 py-2 rounded-lg border border-slate-200 text-black  text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
                         />
                     </div>
+                    {/* Date range */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <label className="flex items-center gap-2 text-xs text-slate-500">
+                            <span className="w-10">From</span>
+                            <input
+                                type="date"
+                                value={fromDate}
+                                onChange={(e) => setFromDate(e.target.value)}
+                                className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
+                            />
+                        </label>
+                        <label className="flex items-center gap-2 text-xs text-slate-500">
+                            <span className="w-6">To</span>
+                            <input
+                                type="date"
+                                value={toDate}
+                                onChange={(e) => setToDate(e.target.value)}
+                                className="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-400"
+                            />
+                        </label>
+                    </div>
+                    {(fromDate || toDate || type || walletType || category || chainType || tokenSymbol) && (
+                        <button
+                            onClick={() => {
+                                setType(''); setWalletType(''); setCategory('');
+                                setChainType(''); setTokenSymbol(''); setFromDate(''); setToDate('');
+                            }}
+                            className="text-xs text-slate-500 hover:text-slate-700 underline"
+                        >
+                            Clear filters
+                        </button>
+                    )}
                 </div>
 
                 {/* Content */}
@@ -220,6 +285,8 @@ export default function HistoryPage() {
                             {data.items.map((tx) => {
                                 const badge = getCategoryBadge(tx.category);
                                 const isIncoming = tx.direction === 'incoming';
+                                // Terminal "reversed/unsuccessful" states: don't render as a green credit.
+                                const isBad = ['failed', 'refunded', 'cancelled'].includes(tx.status);
 
                                 return (
                                     <div
@@ -229,11 +296,10 @@ export default function HistoryPage() {
                                         <div className="flex items-center justify-between">
                                             <div className="flex items-center gap-3">
                                                 {/* Direction icon */}
-                                                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                                                    isIncoming ? 'bg-emerald-100' : 'bg-orange-100'
-                                                }`}>
+                                                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${isBad ? 'bg-slate-100' : isIncoming ? 'bg-emerald-100' : 'bg-orange-100'
+                                                    }`}>
                                                     <svg
-                                                        className={`w-5 h-5 ${isIncoming ? 'text-emerald-600' : 'text-orange-600'}`}
+                                                        className={`w-5 h-5 ${isBad ? 'text-slate-400' : isIncoming ? 'text-emerald-600' : 'text-orange-600'}`}
                                                         fill="none"
                                                         stroke="currentColor"
                                                         viewBox="0 0 24 24"
@@ -259,13 +325,17 @@ export default function HistoryPage() {
                                                         <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${badge.bg} ${badge.text}`}>
                                                             {badge.label}
                                                         </span>
-                                                        <span className={`text-xs px-1.5 py-0.5 rounded ${
-                                                            tx.walletType === 'money'
-                                                                ? 'bg-emerald-50 text-emerald-600'
-                                                                : 'bg-purple-50 text-purple-600'
-                                                        }`}>
+                                                        <span className={`text-xs px-1.5 py-0.5 rounded ${tx.walletType === 'money'
+                                                            ? 'bg-emerald-50 text-emerald-600'
+                                                            : 'bg-purple-50 text-purple-600'
+                                                            }`}>
                                                             {tx.walletType}
                                                         </span>
+                                                        {isBad && (
+                                                            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 capitalize">
+                                                                {tx.status}
+                                                            </span>
+                                                        )}
                                                     </div>
                                                     <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
                                                         {tx.counterpartyUsername ? (
@@ -293,14 +363,14 @@ export default function HistoryPage() {
                                             </div>
 
                                             <div className="text-right">
-                                                <p className={`font-bold ${isIncoming ? 'text-emerald-600' : 'text-slate-900'}`}>
-                                                    {isIncoming ? '+' : '-'}{parseFloat(tx.asset.amount).toFixed(4)} {tx.asset.symbol}
+                                                <p className={`font-bold ${isBad ? 'text-slate-400 line-through' : isIncoming ? 'text-emerald-600' : 'text-slate-900'}`}>
+                                                    {isBad ? '' : isIncoming ? '+' : '-'}{tx.amountDecimal ?? (Number(tx.asset.amount) / 10 ** (tx.asset.decimals || 0)).toString()} {tx.asset.symbol}
                                                 </p>
                                                 <p className="text-xs text-slate-400 mt-1">
                                                     {new Date(tx.timestamp).toLocaleString()}
                                                 </p>
                                                 <a
-                                                    href={getExplorerUrl(tx.chainType, tx.chainId, tx.hash)}
+                                                    href={tx.explorerUrl ?? getExplorerUrl(tx.chainType, tx.chainId, tx.hash)}
                                                     target="_blank"
                                                     rel="noreferrer"
                                                     className="text-xs text-blue-500 hover:text-blue-700 underline"

@@ -10,6 +10,7 @@ export default function PasskeyRegistrationPage() {
     const router = useRouter();
     const [step, setStep] = useState<'input' | 'registering' | 'creating_wallets' | 'success'>('input');
     const [reservationToken, setReservationToken] = useState('');
+    const [referralCode, setReferralCode] = useState('');
     const [username, setUsername] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
@@ -57,6 +58,7 @@ export default function PasskeyRegistrationPage() {
                 headers: { 'ngrok-skip-browser-warning': 'true' },
                 json: {
                     reservationToken,
+                    ...(referralCode.trim() ? { referralCode: referralCode.trim() } : {}),
                     credential: attResp,
                     deviceInfo: {
                         userAgent: navigator.userAgent,
@@ -211,6 +213,13 @@ export default function PasskeyRegistrationPage() {
                                     value={reservationToken}
                                     onChange={(e) => setReservationToken(e.target.value)}
                                     className="w-full px-4 py-3 bg-white/10 border border-white/30 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                />
+                                <input
+                                    type="text"
+                                    placeholder="Referral Code (optional) — e.g. ABS235SGN27"
+                                    value={referralCode}
+                                    onChange={(e) => setReferralCode(e.target.value)}
+                                    className="w-full mt-3 px-4 py-3 bg-white/10 border border-white/30 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
                                 />
                                 <button
                                     onClick={handleRegister}
