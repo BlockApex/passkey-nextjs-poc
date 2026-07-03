@@ -859,10 +859,13 @@ export default function DashboardPage() {
                                 recentActivity.map((tx: any, idx: number) => {
                                     const incoming = tx.direction === 'incoming';
                                     const settled = tx.status === 'settled' || tx.status === 'confirmed';
+                                    // A `failed`/`refunded`/`cancelled` deposit never landed in balance —
+                                    // don't paint it as a green credit even though it's `incoming`.
+                                    const didNotLand = tx.status === 'failed' || tx.status === 'refunded' || tx.status === 'cancelled';
                                     return (
                                         <div key={tx._id ?? idx} className="bg-white rounded-xl shadow-sm border border-slate-200 px-6 py-4 flex items-center justify-between">
                                             <div className="flex items-center gap-4">
-                                                <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold ${incoming ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500'}`}>
+                                                <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold ${didNotLand ? 'bg-slate-100 text-slate-400' : incoming ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500'}`}>
                                                     {incoming ? '↓' : '↑'}
                                                 </div>
                                                 <div>
@@ -878,8 +881,8 @@ export default function DashboardPage() {
                                                 </div>
                                             </div>
                                             <div className="text-right">
-                                                <p className={`font-bold ${incoming ? 'text-emerald-600' : 'text-slate-900'}`}>
-                                                    {incoming ? '+' : '-'}{tx.amountDecimal ?? ''} {tx.asset?.symbol ?? ''}
+                                                <p className={`font-bold ${didNotLand ? 'text-slate-400 line-through' : incoming ? 'text-emerald-600' : 'text-slate-900'}`}>
+                                                    {didNotLand ? '' : incoming ? '+' : '-'}{tx.amountDecimal ?? ''} {tx.asset?.symbol ?? ''}
                                                 </p>
                                                 {tx.explorerUrl && (
                                                     <a href={tx.explorerUrl} target="_blank" rel="noreferrer" className="text-xs text-emerald-600 hover:underline">explorer</a>
