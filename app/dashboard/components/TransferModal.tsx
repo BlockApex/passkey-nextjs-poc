@@ -45,6 +45,8 @@ interface TransferModalProps {
     walletType: 'spot' | 'money';
     defaultRecipient?: string;
     defaultAmount?: string;
+    /** When true this is a Money→Spot claim: record via /transactions/claim (CLAIM category) instead of /transactions/record. */
+    isClaim?: boolean;
 }
 
 /** Record a completed transfer in the backend for history & handle-user matching */
@@ -72,7 +74,28 @@ async function recordTransfer(params: {
     }
 }
 
-export default function TransferModal({ isOpen, onClose, token, accessToken, walletType, defaultRecipient, defaultAmount }: TransferModalProps) {
+/** Record a completed claim (Money→Spot) — backend writes a CLAIM tx and resolves from/to itself */
+async function recordClaim(params: {
+    hash: string;
+    chainType: 'evm' | 'svm';
+    chainId: number;
+    tokenSymbol: string;
+    tokenAddress: string;
+    tokenDecimals: number;
+    amount: string;
+}) {
+    try {
+        await signedFetch('/transactions/claim', {
+            method: 'POST',
+            auth: true,
+            json: { ...params, status: 'confirmed' },
+        });
+    } catch (e) {
+        console.warn('[TransferModal] Failed to record claim:', e);
+    }
+}
+
+export default function TransferModal({ isOpen, onClose, token, accessToken, walletType, defaultRecipient, defaultAmount, isClaim = false }: TransferModalProps) {
     const [recipient, setRecipient] = useState('');
     const [amount, setAmount] = useState('');
     const [loading, setLoading] = useState(false);
@@ -208,19 +231,31 @@ export default function TransferModal({ isOpen, onClose, token, accessToken, wal
                 setSuccessHash(signature);
                 setStatus('Success!');
 
-                // Record transfer for history
-                recordTransfer({
-                    hash: signature,
-                    chainType: 'svm',
-                    chainId: token.chainId || 103,
-                    from: senderAddress,
-                    to: recipientValidation.address!.toBase58(),
-                    tokenSymbol: token.symbol,
-                    tokenAddress: token.address,
-                    tokenDecimals: token.decimals || 6,
-                    amount,
-                    walletType,
-                });
+                // Record in backend (claim → CLAIM tx; else normal transfer)
+                if (isClaim) {
+                    await recordClaim({
+                        hash: signature,
+                        chainType: 'svm',
+                        chainId: token.chainId || 103,
+                        tokenSymbol: token.symbol,
+                        tokenAddress: token.address,
+                        tokenDecimals: token.decimals || 6,
+                        amount,
+                    });
+                } else {
+                    recordTransfer({
+                        hash: signature,
+                        chainType: 'svm',
+                        chainId: token.chainId || 103,
+                        from: senderAddress,
+                        to: recipientValidation.address!.toBase58(),
+                        tokenSymbol: token.symbol,
+                        tokenAddress: token.address,
+                        tokenDecimals: token.decimals || 6,
+                        amount,
+                        walletType,
+                    });
+                }
 
                 return; // Exit function after successful SVM transfer
             }
@@ -236,28 +271,44 @@ export default function TransferModal({ isOpen, onClose, token, accessToken, wal
                 amount,
                 decimals: token.decimals || 18,
                 walletType,
+                // Claims (same-chain Money->Spot) go through Rhinestone's SPONSORED
+                // intent path — gasless via the sponsorship balance, no paymaster.
+                // (Earlier 422s were an unfunded balance, not a same-chain limitation.)
+                directUserOp: false,
             });
 
             setSuccessHash(result.hash);
             setStatus('Success!');
 
-            // Record transfer for history
-            const wallets = JSON.parse(localStorage.getItem('wallets') || '{}');
-            const senderAddr = walletType === 'spot'
-                ? wallets.spot?.evm?.address
-                : wallets.money?.evm?.address;
-            recordTransfer({
-                hash: result.hash,
-                chainType: 'evm',
-                chainId: token.chainId || 11155111,
-                from: senderAddr || '',
-                to: recipient,
-                tokenSymbol: token.symbol,
-                tokenAddress: token.address,
-                tokenDecimals: token.decimals || 18,
-                amount,
-                walletType,
-            });
+            // Record in backend (claim → CLAIM tx; else normal transfer)
+            if (isClaim) {
+                await recordClaim({
+                    hash: result.hash,
+                    chainType: 'evm',
+                    chainId: token.chainId || 8453,
+                    tokenSymbol: token.symbol,
+                    tokenAddress: token.address,
+                    tokenDecimals: token.decimals || 18,
+                    amount,
+                });
+            } else {
+                const wallets = JSON.parse(localStorage.getItem('wallets') || '{}');
+                const senderAddr = walletType === 'spot'
+                    ? wallets.spot?.evm?.address
+                    : wallets.money?.evm?.address;
+                recordTransfer({
+                    hash: result.hash,
+                    chainType: 'evm',
+                    chainId: token.chainId || 11155111,
+                    from: senderAddr || '',
+                    to: recipient,
+                    tokenSymbol: token.symbol,
+                    tokenAddress: token.address,
+                    tokenDecimals: token.decimals || 18,
+                    amount,
+                    walletType,
+                });
+            }
 
         } catch (err: any) {
             console.error('Transfer Error:', err);

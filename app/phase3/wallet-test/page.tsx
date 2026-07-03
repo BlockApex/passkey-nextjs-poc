@@ -97,7 +97,7 @@ export default function WalletTestPage() {
                 method: 'POST',
                 json: {
                     username: svmUsername,
-                    usecaseId: usecaseId,
+                    usecaseIds: [usecaseId],
                 },
             });
             if (!reserveRes.ok) {

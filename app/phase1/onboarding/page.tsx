@@ -16,7 +16,7 @@ interface Usecase {
 
 export default function OnboardingPage() {
     const [usecases, setUsecases] = useState<Usecase[]>([]);
-    const [selectedUsecase, setSelectedUsecase] = useState<Usecase | null>(null);
+    const [selectedUsecases, setSelectedUsecases] = useState<Usecase[]>([]);
     const [username, setUsername] = useState('');
     const [usernameValid, setUsernameValid] = useState(false);
     const [usernameAvailable, setUsernameAvailable] = useState(false);
@@ -94,8 +94,16 @@ export default function OnboardingPage() {
         }
     };
 
+    const toggleUsecase = (usecase: Usecase) => {
+        setSelectedUsecases((prev) =>
+            prev.some((u) => u.id === usecase.id)
+                ? prev.filter((u) => u.id !== usecase.id)
+                : [...prev, usecase]
+        );
+    };
+
     const reserveUsername = async () => {
-        if (!selectedUsecase || !usernameAvailable) return;
+        if (selectedUsecases.length === 0 || !usernameAvailable) return;
 
         setReserving(true);
 
@@ -105,7 +113,7 @@ export default function OnboardingPage() {
                 headers: { 'ngrok-skip-browser-warning': 'true' },
                 json: {
                     username,
-                    usecaseId: selectedUsecase.id,
+                    usecaseIds: selectedUsecases.map((u) => u.id),
                 },
             });
 
@@ -148,9 +156,17 @@ export default function OnboardingPage() {
                                 1
                             </span>
                             <h2 className="text-xl font-semibold text-slate-900">
-                                Select Your Usecase
+                                Select Your Usecase(s)
                             </h2>
+                            {selectedUsecases.length > 0 && (
+                                <span className="ml-auto text-sm font-medium text-purple-600">
+                                    {selectedUsecases.length} selected
+                                </span>
+                            )}
                         </div>
+                        <p className="text-sm text-slate-500 mb-4">
+                            Pick one or more — the first you select is your primary.
+                        </p>
 
                         {loading ? (
                             <div className="text-center py-8 text-slate-600">
@@ -162,21 +178,29 @@ export default function OnboardingPage() {
                             </div>
                         ) : (
                             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                                {usecases.map((usecase) => (
-                                    <button
-                                        key={usecase.id}
-                                        onClick={() => setSelectedUsecase(usecase)}
-                                        className={`p-4 rounded-xl border-2 transition-all ${selectedUsecase?.id === usecase.id
-                                            ? 'border-purple-500 bg-purple-50'
-                                            : 'border-slate-200 hover:border-purple-300'
-                                            }`}
-                                    >
-                                        <div className="text-3xl mb-2">{usecase.icon}</div>
-                                        <div className="text-sm font-semibold text-slate-900">
-                                            {usecase.name}
-                                        </div>
-                                    </button>
-                                ))}
+                                {usecases.map((usecase) => {
+                                    const isSelected = selectedUsecases.some((u) => u.id === usecase.id);
+                                    return (
+                                        <button
+                                            key={usecase.id}
+                                            onClick={() => toggleUsecase(usecase)}
+                                            className={`relative p-4 rounded-xl border-2 transition-all ${isSelected
+                                                ? 'border-purple-500 bg-purple-50'
+                                                : 'border-slate-200 hover:border-purple-300'
+                                                }`}
+                                        >
+                                            {isSelected && (
+                                                <span className="absolute top-2 right-2 w-5 h-5 rounded-full bg-purple-600 text-white flex items-center justify-center text-xs">
+                                                    ✓
+                                                </span>
+                                            )}
+                                            <div className="text-3xl mb-2">{usecase.icon}</div>
+                                            <div className="text-sm font-semibold text-slate-900">
+                                                {usecase.name}
+                                            </div>
+                                        </button>
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
@@ -278,7 +302,7 @@ export default function OnboardingPage() {
 
                         <button
                             onClick={reserveUsername}
-                            disabled={!selectedUsecase || !usernameAvailable || reserving || !!reservationResult}
+                            disabled={selectedUsecases.length === 0 || !usernameAvailable || reserving || !!reservationResult}
                             className="w-full bg-purple-600 text-white py-3 rounded-lg font-semibold hover:bg-purple-700 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
                         >
                             {reserving

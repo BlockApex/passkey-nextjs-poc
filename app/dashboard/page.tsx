@@ -1,11 +1,14 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import TransferModal from './components/TransferModal';
 import OfframpModal from './components/OfframpModal';
 // TransactionHistoryList removed — history is now a dedicated page at /dashboard/history
 import { useDepositRegistration } from '@/hooks/useDepositRegistration';
+import { useSweepEnable } from '@/hooks/useSweepEnable';
+import { useSessionStatus } from '@/hooks/useSessionStatus';
+import { useExtendSession } from '@/hooks/useExtendSession';
 import { signedFetch } from '@/lib/api/signedFetch';
 
 interface ChainBreakdown {
@@ -24,6 +27,7 @@ interface Asset {
     totalUsdValue: string;
     price: string;
     decimals: number;
+    logoUrl?: string | null;
     chains: ChainBreakdown[];
 }
 
@@ -42,6 +46,96 @@ interface WalletAddresses {
 
 type ActiveWallet = 'spot' | 'money';
 
+/** Map a /transactions/dashboard asset into the existing Portfolio Asset shape. */
+function mapDashboardAssets(arr: any[]): Asset[] {
+    return (arr ?? []).map((a) => ({
+        symbol: a.symbol,
+        name: a.name,
+        totalBalance: a.amount,
+        totalUsdValue: a.usdValue,
+        price: a.price,
+        decimals: a.decimals,
+        logoUrl: a.logoUrl ?? null,
+        chains: a.chains,
+    }));
+}
+
+/**
+ * Token icon: render the `logoUrl` image when present, otherwise (or if it
+ * fails to load) fall back to the gradient letter avatar.
+ */
+function TokenIcon({
+    symbol,
+    logoUrl,
+    gradient,
+    sizeClass = 'h-12 w-12',
+    textClass = 'text-lg',
+}: {
+    symbol: string;
+    logoUrl?: string | null;
+    gradient: string;
+    sizeClass?: string;
+    textClass?: string;
+}) {
+    const [errored, setErrored] = useState(false);
+    if (logoUrl && !errored) {
+        // eslint-disable-next-line @next/next/no-img-element
+        return (
+            <img
+                src={logoUrl}
+                alt={symbol}
+                onError={() => setErrored(true)}
+                className={`${sizeClass} rounded-full object-cover bg-white border border-slate-100`}
+            />
+        );
+    }
+    return (
+        <div className={`${sizeClass} bg-gradient-to-br ${gradient} rounded-full flex items-center justify-center font-bold text-white ${textClass}`}>
+            {symbol[0]}
+        </div>
+    );
+}
+
+/**
+ * Activity-row avatar: the token `logoUrl` image with a small direction badge
+ * (↓ incoming / ↑ outgoing), falling back to the plain arrow circle when there
+ * is no logo (or it fails to load). `muted` = the tx didn't land (failed/etc.).
+ */
+function ActivityAvatar({
+    logoUrl,
+    symbol,
+    incoming,
+    muted,
+}: {
+    logoUrl?: string | null;
+    symbol?: string;
+    incoming: boolean;
+    muted: boolean;
+}) {
+    const [errored, setErrored] = useState(false);
+    const showImg = !!logoUrl && !errored;
+    return (
+        <div className="relative h-10 w-10 shrink-0">
+            {showImg ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                    src={logoUrl!}
+                    alt={symbol ?? ''}
+                    onError={() => setErrored(true)}
+                    className="h-10 w-10 rounded-full object-cover bg-white border border-slate-100"
+                />
+            ) : (
+                <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold ${muted ? 'bg-slate-100 text-slate-400' : incoming ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500'}`}>
+                    {incoming ? '↓' : '↑'}
+                </div>
+            )}
+            <span className={`absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full flex items-center justify-center text-[10px] leading-none border-2 border-white ${muted ? 'bg-slate-300 text-slate-700' : incoming ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>
+                {incoming ? '↓' : '↑'}
+            </span>
+        </div>
+    );
+}
+
 export default function DashboardPage() {
     const router = useRouter();
     const [spotPortfolio, setSpotPortfolio] = useState<Portfolio | null>(null);
@@ -55,18 +149,45 @@ export default function DashboardPage() {
     const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
     const [selectedOfframpToken, setSelectedOfframpToken] = useState<any>(null);
     const [isOfframpModalOpen, setIsOfframpModalOpen] = useState(false);
-    const [activeTab, setActiveTab] = useState<'tokens' | 'unclaimed'>('tokens');
+    const [activeTab, setActiveTab] = useState<'tokens' | 'unclaimed' | 'activity'>('tokens');
+    const [recentActivity, setRecentActivity] = useState<any[]>([]);
     const [selectedCurrency, setSelectedCurrency] = useState<string>('USD');
     const [activeWallet, setActiveWallet] = useState<ActiveWallet>('spot');
     const [depositRegistered, setDepositRegistered] = useState(false);
     const [depositMessage, setDepositMessage] = useState<string | null>(null);
     const { registerForDeposits, isRegistering, error: depositError } = useDepositRegistration();
+    const { enableSweep, isEnabling, error: sweepError } = useSweepEnable();
+    const [sweepEnabled, setSweepEnabled] = useState(false);
+    const [sweepMessage, setSweepMessage] = useState<string | null>(null);
+    const { status: sessionStatus, refresh: refreshSessionStatus } = useSessionStatus();
+    const { extendSession, isExtending, error: extendError } = useExtendSession();
+    const [extendMessage, setExtendMessage] = useState<string | null>(null);
+
+    const handleExtendSession = async () => {
+        setExtendMessage(null);
+        try {
+            const result = await extendSession();
+            if (result) {
+                setExtendMessage(
+                    `Authorized chains: ${result.approvedChainIds.join(', ')}`,
+                );
+            } else {
+                setExtendMessage('No new chains to authorize');
+            }
+            await refreshSessionStatus();
+        } catch {
+            // useExtendSession already surfaces error via `extendError`
+        }
+    };
 
     // Unclaimed tokens state
     const [unclaimedTokens, setUnclaimedTokens] = useState<any>(null);
     const [unclaimedLoading, setUnclaimedLoading] = useState(false);
     const [claimRecipient, setClaimRecipient] = useState<string | undefined>(undefined);
     const [claimAmount, setClaimAmount] = useState<string | undefined>(undefined);
+    // True when the transfer modal is opened for a claim (Money→Spot). Forces the
+    // transfer source to the Money wallet and records via /transactions/claim.
+    const [isClaimMode, setIsClaimMode] = useState(false);
 
     // Parse wallet addresses from localStorage
     const walletAddresses = useMemo<WalletAddresses>(() => {
@@ -101,34 +222,54 @@ export default function DashboardPage() {
             return;
         }
         setAccessToken(token);
-        fetchAllBalances();
     }, []);
 
-    const fetchAllBalances = async () => {
-        setLoading(true);
+    // Single source for the wallet screen: /transactions/dashboard returns both
+    // wallets' USD+PKR totals, the active wallet's assets, and the last 4 activity
+    // items. We map it into the existing spot/money portfolio shapes so the render
+    // stays the same — just now polled, so balances/activity update without a
+    // manual refresh.
+    const fetchDashboard = useCallback(async () => {
+        if (!localStorage.getItem('accessToken')) return;
         try {
-            const [spotRes, moneyRes] = await Promise.all([
-                signedFetch('/transactions/balances?walletType=spot', { auth: true }),
-                signedFetch('/transactions/balances?walletType=money', { auth: true }),
-            ]);
-
-            if (spotRes.status === 401 || moneyRes.status === 401) {
+            const res = await signedFetch(
+                `/transactions/dashboard?walletType=${activeWallet}`,
+                { auth: true },
+            );
+            if (res.status === 401) {
                 localStorage.removeItem('accessToken');
                 router.push('/');
                 return;
             }
-
-            if (spotRes.ok) setSpotPortfolio(await spotRes.json());
-            if (moneyRes.ok) setMoneyPortfolio(await moneyRes.json());
-
-            // Also fetch unclaimed tokens
-            fetchUnclaimedTokens();
+            if (res.ok) {
+                const d = await res.json();
+                setMoneyPortfolio((prev) => ({
+                    totalUsd: d.wallets.money.usd,
+                    convertedTotals: { PKR: d.wallets.money.pkr },
+                    assets: activeWallet === 'money' ? mapDashboardAssets(d.assets) : (prev?.assets ?? []),
+                }));
+                setSpotPortfolio((prev) => ({
+                    totalUsd: d.wallets.spot.usd,
+                    convertedTotals: { PKR: d.wallets.spot.pkr },
+                    assets: activeWallet === 'spot' ? mapDashboardAssets(d.assets) : (prev?.assets ?? []),
+                }));
+                setRecentActivity(d.recentActivity ?? []);
+                if (activeWallet === 'money') fetchUnclaimedTokens();
+            }
         } catch (err: any) {
             setError(err.message);
         } finally {
             setLoading(false);
         }
-    };
+    }, [activeWallet, router]);
+
+    // Fetch on mount + whenever the active wallet changes, and poll every 8s.
+    useEffect(() => {
+        if (!accessToken) return;
+        fetchDashboard();
+        const id = setInterval(fetchDashboard, 8000);
+        return () => clearInterval(id);
+    }, [accessToken, fetchDashboard]);
 
     const fetchUnclaimedTokens = async () => {
         setUnclaimedLoading(true);
@@ -153,6 +294,9 @@ export default function DashboardPage() {
     };
 
     const openTransferModal = (asset: Asset, chain: ChainBreakdown) => {
+        setIsClaimMode(false);
+        setClaimRecipient(undefined);
+        setClaimAmount(undefined);
         setSelectedToken({
             symbol: asset.symbol,
             name: asset.name,
@@ -239,7 +383,7 @@ export default function DashboardPage() {
                         <button
                             onClick={() => {
                                 setLoading(true);
-                                if (localStorage.getItem('accessToken')) fetchAllBalances();
+                                if (localStorage.getItem('accessToken')) fetchDashboard();
                             }}
                             disabled={loading}
                             className="text-emerald-600 hover:text-emerald-700 font-medium flex items-center gap-2 disabled:opacity-50"
@@ -299,6 +443,42 @@ export default function DashboardPage() {
                 </div>
 
                 {error && <div className="bg-red-50 text-red-600 p-4 rounded-lg mb-6">{error}</div>}
+
+                {/* New-chain re-authorization banner. Shows only when the user is already
+                    registered AND one or more active EVM chains were added after their
+                    last session sign. One passkey signature covers all pending chains. */}
+                {sessionStatus?.needsAction && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 mb-6">
+                        <div className="flex items-start justify-between gap-4">
+                            <div className="flex-1">
+                                <h3 className="font-bold text-amber-900 mb-1">
+                                    New chains available — authorize to enable deposits
+                                </h3>
+                                <p className="text-sm text-amber-800">
+                                    {sessionStatus.pending.length === 1
+                                        ? `${sessionStatus.pending[0].name} was added after you set up your Money wallet. Sign once to start accepting deposits from it.`
+                                        : `${sessionStatus.pending.length} new chains were added after you set up your Money wallet. One signature authorizes them all.`}
+                                </p>
+                                <p className="text-xs text-amber-700 mt-2">
+                                    Pending: {sessionStatus.pending.map((c) => `${c.name} (${c.chainId})`).join(', ')}
+                                </p>
+                                {extendMessage && (
+                                    <p className="text-xs mt-2 text-emerald-700">{extendMessage}</p>
+                                )}
+                                {extendError && (
+                                    <p className="text-xs mt-2 text-red-600">{extendError}</p>
+                                )}
+                            </div>
+                            <button
+                                onClick={handleExtendSession}
+                                disabled={isExtending}
+                                className="px-5 py-2 bg-amber-600 text-white font-semibold rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                            >
+                                {isExtending ? 'Signing…' : 'Authorize'}
+                            </button>
+                        </div>
+                    </div>
+                )}
 
                 {/* Active Wallet Content */}
                 <div className="space-y-6">
@@ -439,6 +619,63 @@ export default function DashboardPage() {
                                         )}
                                     </div>
 
+                                    {/* Auto-Sweep enable — non-bridgeable deposits get moved Money → Spot */}
+                                    <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-lg">
+                                        {sweepEnabled ? (
+                                            <div className="flex items-center gap-3">
+                                                <span className="text-indigo-600">🧹</span>
+                                                <div>
+                                                    <p className="text-sm font-semibold text-indigo-800">Auto-Sweep Enabled</p>
+                                                    <p className="text-xs text-indigo-600">Tokens that can’t bridge to USDT0 (e.g. DAI, WETH) auto-move to your Spot wallet</p>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div>
+                                                <div className="flex items-center justify-between">
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-indigo-800">Enable Auto-Sweep</p>
+                                                        <p className="text-xs text-indigo-600">Move non-bridgeable deposits from Money → Spot automatically</p>
+                                                    </div>
+                                                    <button
+                                                        onClick={async () => {
+                                                            if (!accessToken) return;
+                                                            setSweepMessage(null);
+                                                            try {
+                                                                const result = await enableSweep();
+                                                                setSweepEnabled(true);
+                                                                setSweepMessage(`Enabled on chains: ${result.chainIds.join(', ')}`);
+                                                            } catch (err: any) {
+                                                                setSweepMessage(err?.message || 'Sweep enable failed');
+                                                            }
+                                                        }}
+                                                        disabled={isEnabling || !accessToken}
+                                                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                                    >
+                                                        {isEnabling ? (
+                                                            <>
+                                                                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                                                </svg>
+                                                                Signing...
+                                                            </>
+                                                        ) : (
+                                                            '🔐 Enable'
+                                                        )}
+                                                    </button>
+                                                </div>
+                                                {sweepMessage && (
+                                                    <p className={`text-xs mt-2 ${sweepError ? 'text-red-600' : 'text-indigo-600'}`}>
+                                                        {sweepMessage}
+                                                    </p>
+                                                )}
+                                                {sweepError && (
+                                                    <p className="text-xs mt-1 text-red-600">{sweepError}</p>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+
                                     {/* Money Wallet SVM Address (Rhinestone Solana Deposit Address) */}
                                     {walletAddresses.moneySvm && (
                                         <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
@@ -469,6 +706,15 @@ export default function DashboardPage() {
                             }`}
                         >
                             Assets
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('activity')}
+                            className={`px-6 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'activity'
+                                ? cfg.tabActive
+                                : 'border-transparent text-slate-500 hover:text-slate-700'
+                            }`}
+                        >
+                            Activity
                         </button>
                         {activeWallet === 'money' && (
                             <button
@@ -518,9 +764,7 @@ export default function DashboardPage() {
                                         <div className="bg-slate-50 px-6 py-4 border-b border-slate-200">
                                             <div className="flex items-center justify-between">
                                                 <div className="flex items-center gap-4">
-                                                    <div className={`h-12 w-12 bg-gradient-to-br ${cfg.gradient} rounded-full flex items-center justify-center font-bold text-white text-lg`}>
-                                                        {asset.symbol[0]}
-                                                    </div>
+                                                    <TokenIcon symbol={asset.symbol} logoUrl={asset.logoUrl} gradient={cfg.gradient} />
                                                     <div>
                                                         <h3 className="font-bold text-slate-900 text-lg">{asset.name}</h3>
                                                         <p className="text-sm text-slate-500">{asset.symbol}</p>
@@ -620,9 +864,7 @@ export default function DashboardPage() {
                                         <div key={idx} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                                             <div className="px-6 py-4 flex items-center justify-between">
                                                 <div className="flex items-center gap-4">
-                                                    <div className="h-10 w-10 bg-gradient-to-br from-amber-400 to-orange-500 rounded-full flex items-center justify-center font-bold text-white">
-                                                        {asset.symbol[0]}
-                                                    </div>
+                                                    <TokenIcon symbol={asset.symbol} logoUrl={asset.logoUrl} gradient="from-amber-400 to-orange-500" sizeClass="h-10 w-10" textClass="" />
                                                     <div>
                                                         <h3 className="font-bold text-slate-900">{asset.name}</h3>
                                                         <p className="text-sm text-slate-500">{asset.symbol}</p>
@@ -649,6 +891,7 @@ export default function DashboardPage() {
                                                                     const spotAddr = chain.type === 'evm'
                                                                         ? asset.claimTo?.evmAddress
                                                                         : asset.claimTo?.svmAddress;
+                                                                    setIsClaimMode(true);
                                                                     setClaimRecipient(spotAddr || '');
                                                                     setClaimAmount(chain.balance);
                                                                     setSelectedToken({
@@ -683,18 +926,68 @@ export default function DashboardPage() {
                                 </div>
                             )}
                         </div>
-                    ) : null}
+                    ) : (
+                        /* Activity Tab — last 4 from /transactions/dashboard (polled) */
+                        <div className="space-y-3">
+                            {recentActivity.length > 0 ? (
+                                recentActivity.map((tx: any, idx: number) => {
+                                    const incoming = tx.direction === 'incoming';
+                                    const settled = tx.status === 'settled' || tx.status === 'confirmed';
+                                    // A `failed`/`refunded`/`cancelled` deposit never landed in balance —
+                                    // don't paint it as a green credit even though it's `incoming`.
+                                    const didNotLand = tx.status === 'failed' || tx.status === 'refunded' || tx.status === 'cancelled';
+                                    return (
+                                        <div key={tx._id ?? idx} className="bg-white rounded-xl shadow-sm border border-slate-200 px-6 py-4 flex items-center justify-between">
+                                            <div className="flex items-center gap-4">
+                                                <ActivityAvatar logoUrl={tx.logoUrl} symbol={tx.asset?.symbol} incoming={incoming} muted={didNotLand} />
+                                                <div>
+                                                    <h3 className="font-semibold text-slate-900 text-sm font-mono">
+                                                        {tx.hash ? `${tx.hash.slice(0, 6)}…${tx.hash.slice(-4)}` : (tx.category ?? 'tx')}
+                                                    </h3>
+                                                    <p className="text-xs text-slate-500">
+                                                        <span className="capitalize">{(tx.category ?? '').replace(/-/g, ' ')}</span>
+                                                        {tx.timestamp ? ` · ${new Date(tx.timestamp).toLocaleDateString()}` : ''}
+                                                        {' · '}
+                                                        <span className={settled ? 'text-emerald-600' : tx.status === 'failed' ? 'text-red-500' : 'text-amber-600'}>{tx.status}</span>
+                                                    </p>
+                                                </div>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className={`font-bold ${didNotLand ? 'text-slate-400 line-through' : incoming ? 'text-emerald-600' : 'text-slate-900'}`}>
+                                                    {didNotLand ? '' : incoming ? '+' : '-'}{tx.amountDecimal ?? ''} {tx.asset?.symbol ?? ''}
+                                                </p>
+                                                {tx.explorerUrl && (
+                                                    <a href={tx.explorerUrl} target="_blank" rel="noreferrer" className="text-xs text-emerald-600 hover:underline">explorer</a>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            ) : (
+                                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-10 text-center text-slate-500 italic">
+                                    No recent activity
+                                </div>
+                            )}
+                            <button
+                                onClick={() => router.push('/dashboard/history')}
+                                className="w-full text-center text-sm text-emerald-600 hover:text-emerald-700 font-medium py-2"
+                            >
+                                View all →
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
 
             <TransferModal
                 isOpen={isTransferModalOpen}
-                onClose={() => { setIsTransferModalOpen(false); setClaimRecipient(undefined); setClaimAmount(undefined); }}
+                onClose={() => { setIsTransferModalOpen(false); setClaimRecipient(undefined); setClaimAmount(undefined); setIsClaimMode(false); }}
                 token={selectedToken}
                 accessToken={localStorage.getItem('accessToken') || ''}
-                walletType={activeWallet}
+                walletType={isClaimMode ? 'money' : activeWallet}
                 defaultRecipient={claimRecipient}
                 defaultAmount={claimAmount}
+                isClaim={isClaimMode}
             />
 
             <OfframpModal
