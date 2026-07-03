@@ -31,9 +31,10 @@ interface TransactionItem {
     };
     counterpartyUsername?: string;
     note?: string;
-    // Provided by the backend now: human decimal amount + chain-aware explorer link.
+    // Provided by the backend now: human decimal amount + chain-aware explorer link + token logo.
     amountDecimal?: string;
     explorerUrl?: string | null;
+    logoUrl?: string | null;
 }
 
 interface HistoryResponse {
@@ -103,6 +104,57 @@ function getExplorerUrl(chainType: string, chainId: number, hash: string) {
         42161: `https://arbiscan.io/tx/${hash}`,
     };
     return explorers[chainId] || `#`;
+}
+
+/** Up/down arrow path for the direction indicator. */
+function arrowPath(isIncoming: boolean) {
+    return isIncoming
+        ? 'M19 14l-7 7m0 0l-7-7m7 7V3'
+        : 'M5 10l7-7m0 0l7 7m-7-7v18';
+}
+
+/**
+ * History-row avatar: the token `logoUrl` image with a small direction badge,
+ * falling back to the plain arrow circle when there is no logo (or it fails to
+ * load). `isBad` = terminal unsuccessful state (failed/refunded/cancelled).
+ */
+function HistoryAvatar({
+    logoUrl,
+    symbol,
+    isIncoming,
+    isBad,
+}: {
+    logoUrl?: string | null;
+    symbol: string;
+    isIncoming: boolean;
+    isBad: boolean;
+}) {
+    const [errored, setErrored] = useState(false);
+    const showImg = !!logoUrl && !errored;
+    return (
+        <div className="relative w-10 h-10 shrink-0">
+            {showImg ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                    src={logoUrl!}
+                    alt={symbol}
+                    onError={() => setErrored(true)}
+                    className="w-10 h-10 rounded-full object-cover bg-white border border-slate-100"
+                />
+            ) : (
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${isBad ? 'bg-slate-100' : isIncoming ? 'bg-emerald-100' : 'bg-orange-100'}`}>
+                    <svg className={`w-5 h-5 ${isBad ? 'text-slate-400' : isIncoming ? 'text-emerald-600' : 'text-orange-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={arrowPath(isIncoming)} />
+                    </svg>
+                </div>
+            )}
+            <span className={`absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center border-2 border-white ${isBad ? 'bg-slate-300' : isIncoming ? 'bg-emerald-500' : 'bg-orange-500'}`}>
+                <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d={arrowPath(isIncoming)} />
+                </svg>
+            </span>
+        </div>
+    );
 }
 
 export default function HistoryPage() {
@@ -295,26 +347,8 @@ export default function HistoryPage() {
                                     >
                                         <div className="flex items-center justify-between">
                                             <div className="flex items-center gap-3">
-                                                {/* Direction icon */}
-                                                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${isBad ? 'bg-slate-100' : isIncoming ? 'bg-emerald-100' : 'bg-orange-100'
-                                                    }`}>
-                                                    <svg
-                                                        className={`w-5 h-5 ${isBad ? 'text-slate-400' : isIncoming ? 'text-emerald-600' : 'text-orange-600'}`}
-                                                        fill="none"
-                                                        stroke="currentColor"
-                                                        viewBox="0 0 24 24"
-                                                    >
-                                                        <path
-                                                            strokeLinecap="round"
-                                                            strokeLinejoin="round"
-                                                            strokeWidth={2}
-                                                            d={isIncoming
-                                                                ? 'M19 14l-7 7m0 0l-7-7m7 7V3'
-                                                                : 'M5 10l7-7m0 0l7 7m-7-7v18'
-                                                            }
-                                                        />
-                                                    </svg>
-                                                </div>
+                                                {/* Token icon + direction badge */}
+                                                <HistoryAvatar logoUrl={tx.logoUrl} symbol={tx.asset.symbol} isIncoming={isIncoming} isBad={isBad} />
 
                                                 <div>
                                                     <div className="flex items-center gap-2">

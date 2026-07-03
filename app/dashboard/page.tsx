@@ -27,6 +27,7 @@ interface Asset {
     totalUsdValue: string;
     price: string;
     decimals: number;
+    logoUrl?: string | null;
     chains: ChainBreakdown[];
 }
 
@@ -54,8 +55,85 @@ function mapDashboardAssets(arr: any[]): Asset[] {
         totalUsdValue: a.usdValue,
         price: a.price,
         decimals: a.decimals,
+        logoUrl: a.logoUrl ?? null,
         chains: a.chains,
     }));
+}
+
+/**
+ * Token icon: render the `logoUrl` image when present, otherwise (or if it
+ * fails to load) fall back to the gradient letter avatar.
+ */
+function TokenIcon({
+    symbol,
+    logoUrl,
+    gradient,
+    sizeClass = 'h-12 w-12',
+    textClass = 'text-lg',
+}: {
+    symbol: string;
+    logoUrl?: string | null;
+    gradient: string;
+    sizeClass?: string;
+    textClass?: string;
+}) {
+    const [errored, setErrored] = useState(false);
+    if (logoUrl && !errored) {
+        // eslint-disable-next-line @next/next/no-img-element
+        return (
+            <img
+                src={logoUrl}
+                alt={symbol}
+                onError={() => setErrored(true)}
+                className={`${sizeClass} rounded-full object-cover bg-white border border-slate-100`}
+            />
+        );
+    }
+    return (
+        <div className={`${sizeClass} bg-gradient-to-br ${gradient} rounded-full flex items-center justify-center font-bold text-white ${textClass}`}>
+            {symbol[0]}
+        </div>
+    );
+}
+
+/**
+ * Activity-row avatar: the token `logoUrl` image with a small direction badge
+ * (↓ incoming / ↑ outgoing), falling back to the plain arrow circle when there
+ * is no logo (or it fails to load). `muted` = the tx didn't land (failed/etc.).
+ */
+function ActivityAvatar({
+    logoUrl,
+    symbol,
+    incoming,
+    muted,
+}: {
+    logoUrl?: string | null;
+    symbol?: string;
+    incoming: boolean;
+    muted: boolean;
+}) {
+    const [errored, setErrored] = useState(false);
+    const showImg = !!logoUrl && !errored;
+    return (
+        <div className="relative h-10 w-10 shrink-0">
+            {showImg ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                    src={logoUrl!}
+                    alt={symbol ?? ''}
+                    onError={() => setErrored(true)}
+                    className="h-10 w-10 rounded-full object-cover bg-white border border-slate-100"
+                />
+            ) : (
+                <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold ${muted ? 'bg-slate-100 text-slate-400' : incoming ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500'}`}>
+                    {incoming ? '↓' : '↑'}
+                </div>
+            )}
+            <span className={`absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full flex items-center justify-center text-[10px] leading-none border-2 border-white ${muted ? 'bg-slate-300 text-slate-700' : incoming ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>
+                {incoming ? '↓' : '↑'}
+            </span>
+        </div>
+    );
 }
 
 export default function DashboardPage() {
@@ -686,9 +764,7 @@ export default function DashboardPage() {
                                         <div className="bg-slate-50 px-6 py-4 border-b border-slate-200">
                                             <div className="flex items-center justify-between">
                                                 <div className="flex items-center gap-4">
-                                                    <div className={`h-12 w-12 bg-gradient-to-br ${cfg.gradient} rounded-full flex items-center justify-center font-bold text-white text-lg`}>
-                                                        {asset.symbol[0]}
-                                                    </div>
+                                                    <TokenIcon symbol={asset.symbol} logoUrl={asset.logoUrl} gradient={cfg.gradient} />
                                                     <div>
                                                         <h3 className="font-bold text-slate-900 text-lg">{asset.name}</h3>
                                                         <p className="text-sm text-slate-500">{asset.symbol}</p>
@@ -788,9 +864,7 @@ export default function DashboardPage() {
                                         <div key={idx} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                                             <div className="px-6 py-4 flex items-center justify-between">
                                                 <div className="flex items-center gap-4">
-                                                    <div className="h-10 w-10 bg-gradient-to-br from-amber-400 to-orange-500 rounded-full flex items-center justify-center font-bold text-white">
-                                                        {asset.symbol[0]}
-                                                    </div>
+                                                    <TokenIcon symbol={asset.symbol} logoUrl={asset.logoUrl} gradient="from-amber-400 to-orange-500" sizeClass="h-10 w-10" textClass="" />
                                                     <div>
                                                         <h3 className="font-bold text-slate-900">{asset.name}</h3>
                                                         <p className="text-sm text-slate-500">{asset.symbol}</p>
@@ -865,9 +939,7 @@ export default function DashboardPage() {
                                     return (
                                         <div key={tx._id ?? idx} className="bg-white rounded-xl shadow-sm border border-slate-200 px-6 py-4 flex items-center justify-between">
                                             <div className="flex items-center gap-4">
-                                                <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold ${didNotLand ? 'bg-slate-100 text-slate-400' : incoming ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500'}`}>
-                                                    {incoming ? '↓' : '↑'}
-                                                </div>
+                                                <ActivityAvatar logoUrl={tx.logoUrl} symbol={tx.asset?.symbol} incoming={incoming} muted={didNotLand} />
                                                 <div>
                                                     <h3 className="font-semibold text-slate-900 text-sm font-mono">
                                                         {tx.hash ? `${tx.hash.slice(0, 6)}…${tx.hash.slice(-4)}` : (tx.category ?? 'tx')}
