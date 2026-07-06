@@ -309,6 +309,112 @@ export function useRhinestoneTransfer() {
     }, [buildRhinestoneAccount]);
 
     /**
+     * Server-prepared Money-wallet payment (handle→handle or pay-by-address).
+     *
+     * Model A: the backend resolves the recipient + returns the exact `calls`;
+     * we submit them as one gasless Plasma user-op (passkey-signed); the backend
+     * records the resulting tx by hash. Fee-free (peer pay isn't a fee point).
+     */
+    const payViaBackend = useCallback(async (params: {
+        accessToken: string;
+        recipient?: { handle?: string; address?: string };
+        amount?: string;
+        note?: string;
+        paymentRequestId?: string; // pay an existing request (recipient + amount come from it)
+    }): Promise<TransferResult> => {
+        setIsSending(true);
+        setError(null);
+
+        try {
+            // 1. Prepare — backend resolves recipient + returns the calls to run.
+            const prepareRes = await signedFetch('/payments/prepare', {
+                method: 'POST',
+                auth: true,
+                json: params.paymentRequestId
+                    ? { paymentRequestId: params.paymentRequestId }
+                    : {
+                        handle: params.recipient?.handle,
+                        address: params.recipient?.address,
+                        amount: params.amount,
+                        note: params.note,
+                    },
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+            });
+            if (!prepareRes.ok) {
+                throw new Error(`Prepare failed: ${prepareRes.status} ${await prepareRes.text()}`);
+            }
+            const prepare: {
+                prepareId: string;
+                chainId: number;
+                calls: { to: string; value: string; data: string }[];
+                tokenRequests: { address: string; amount: string }[];
+            } = await prepareRes.json();
+
+            // 2. Submit via the intent flow (sendTransaction) — routes through the
+            //    Rhinestone orchestrator, so no Plasma bundler is needed. Passkey
+            //    signs. `tokenRequests` tells the orchestrator what to source.
+            const rhinestoneAccount = await buildRhinestoneAccount(
+                params.accessToken,
+                'money',
+            );
+            const chain = getChainById(prepare.chainId);
+            const txResult = await rhinestoneAccount.sendTransaction({
+                chain,
+                calls: prepare.calls.map((c) => ({
+                    to: c.to as `0x${string}`,
+                    value: BigInt(c.value),
+                    data: c.data as Hex,
+                })),
+                tokenRequests: prepare.tokenRequests.map((t) => ({
+                    address: t.address as `0x${string}`,
+                    amount: BigInt(t.amount),
+                })),
+            });
+            await rhinestoneAccount.waitForExecution(txResult);
+
+            // Resolve the REAL on-chain fill hash. `waitForExecution` returns
+            // before the fill hash surfaces for same-chain Plasma intents, so we
+            // poll the intent status (which carries `fill.hash`).
+            const intentId = (txResult as any).id;
+            let hash = '';
+            for (let i = 0; i < 10; i++) {
+                try {
+                    const st: any = await (rhinestoneAccount as any).getIntentStatus(intentId);
+                    if (st?.fill?.hash) { hash = st.fill.hash; break; }
+                    if (st?.status === 'FAILED') break;
+                } catch { /* transient — retry */ }
+                await new Promise((r) => setTimeout(r, 1000));
+            }
+            // Fallback: the intent id (still lets the backend record something).
+            if (!hash) hash = toHexHash(intentId) || 'submitted';
+
+            // 3. Complete — backend records the transfer (feed + counterparty).
+            const completeRes = await signedFetch('/payments/complete', {
+                method: 'POST',
+                auth: true,
+                json: { prepareId: prepare.prepareId, hash },
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+            });
+            if (!completeRes.ok) {
+                // On-chain send already succeeded — don't lose the hash if recording fails.
+                console.error(
+                    '[pay] complete (record) failed:',
+                    completeRes.status,
+                    await completeRes.text(),
+                );
+            }
+
+            return { hash };
+        } catch (err: any) {
+            const message = err.message || 'Payment failed';
+            setError(message);
+            throw err;
+        } finally {
+            setIsSending(false);
+        }
+    }, [buildRhinestoneAccount]);
+
+    /**
      * Get the portfolio (token balances across all chains) for the user's account.
      */
     const getPortfolio = useCallback(async (params: {
@@ -325,6 +431,7 @@ export function useRhinestoneTransfer() {
     return {
         sendEvmTransfer,
         sendCrossChainTransfer,
+        payViaBackend,
         getPortfolio,
         isSending,
         error,

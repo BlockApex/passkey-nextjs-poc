@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { API_BASE, signedFetch } from '@/lib/api/signedFetch';
+import { useRhinestoneTransfer } from '@/hooks/useRhinestoneTransfer';
 
 /** Resolve avatar URL — prepend API_BASE if relative, use initial fallback on error */
 function resolveAvatarUrl(url: string): string {
@@ -100,6 +101,8 @@ export default function PaymentRequestsPage() {
 
     // Action state
     const [actionLoading, setActionLoading] = useState<string | null>(null);
+    const [counts, setCounts] = useState<{ all: number; pending: number; approved: number; declined: number } | null>(null);
+    const { payViaBackend } = useRhinestoneTransfer();
 
     // Auth check
     useEffect(() => {
@@ -122,7 +125,9 @@ export default function PaymentRequestsPage() {
                 auth: true,
             });
             if (res.ok) {
-                setRequests(await res.json());
+                const data = await res.json();
+                setRequests(data.items ?? data ?? []);
+                setCounts(data.counts ?? null);
             }
         } catch (e) {
             console.error('Failed to fetch PRs', e);
@@ -199,31 +204,18 @@ export default function PaymentRequestsPage() {
             return;
         }
 
-        const myWallets = JSON.parse(localStorage.getItem('wallets') || '{}');
-        const myMoneyEvm = myWallets.money?.evm?.address;
-
-        if (!myMoneyEvm) {
-            setCreateError('Money wallet not found');
-            return;
-        }
-
         setCreating(true);
         setCreateError('');
         setCreateSuccess('');
 
         try {
+            // Backend derives token/chain/addresses — we only send who + how much.
             const res = await signedFetch('/payment-requests', {
                 method: 'POST',
                 auth: true,
                 json: {
-                    senderUsername: selectedUser.username,
+                    handle: selectedUser.username,
                     amount: createAmount,
-                    tokenAddress: createTokenAddress,
-                    tokenSymbol: createTokenSymbol,
-                    tokenDecimals: createTokenDecimals,
-                    chainId: createChainId,
-                    chainType: createChainType,
-                    receiverWalletAddress: myMoneyEvm,
                     note: createNote || undefined,
                 },
             });
@@ -233,7 +225,10 @@ export default function PaymentRequestsPage() {
                 throw new Error(err.message || 'Failed to create payment request');
             }
 
-            setCreateSuccess(`Payment request sent to @${selectedUser.username}!`);
+            const created = await res.json();
+            setCreateSuccess(
+                `Request sent to @${selectedUser.username}! Pay link: ${created.payLink ?? ''}`,
+            );
             setSelectedUser(null);
             setCreateAmount('');
             setCreateNote('');
@@ -262,27 +257,22 @@ export default function PaymentRequestsPage() {
         }
     };
 
+    // Pay a request: recipient + amount come from the request; the passkey signs
+    // one gasless Plasma intent (fee applied), and the backend auto-approves it.
     const handleApprove = async (pr: PaymentRequest) => {
-        // For now, mark as approved with a placeholder — in a full implementation,
-        // the TransferModal would handle the actual transfer and then call approve with the txHash
         setActionLoading(pr._id);
         try {
-            // TODO: In production, this should trigger the TransferModal with pre-filled details,
-            // then on transfer success, call the approve endpoint with the real txHash
-            const txHash = prompt('Enter the transaction hash after completing the transfer:');
-            if (!txHash) {
-                setActionLoading(null);
-                return;
-            }
-
-            const res = await signedFetch(`/payment-requests/${pr._id}/approve`, {
-                method: 'PATCH',
-                auth: true,
-                json: { txHash },
+            const token = localStorage.getItem('accessToken');
+            if (!token) throw new Error('Not logged in');
+            const res = await payViaBackend({
+                accessToken: token,
+                paymentRequestId: pr._id,
             });
-            if (res.ok) fetchPaymentRequests();
-        } catch (e) {
-            console.error('Failed to approve', e);
+            console.log('[pay-request] paid, hash:', res.hash);
+            fetchPaymentRequests();
+        } catch (e: any) {
+            alert(e?.message || 'Payment failed');
+            console.error('Failed to pay request', e);
         } finally {
             setActionLoading(null);
         }
@@ -336,7 +326,11 @@ export default function PaymentRequestsPage() {
                     <div>
                         {/* Status filter */}
                         <div className="flex gap-2 mb-4">
-                            {['', 'pending', 'approved', 'declined'].map((s) => (
+                            {['', 'pending', 'approved', 'declined'].map((s) => {
+                                const badge = counts
+                                    ? s === '' ? counts.all : (counts as any)[s]
+                                    : null;
+                                return (
                                 <button
                                     key={s}
                                     onClick={() => setStatusFilter(s)}
@@ -345,9 +339,10 @@ export default function PaymentRequestsPage() {
                                         : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                                     }`}
                                 >
-                                    {s || 'All'}
+                                    {(s || 'All')}{badge != null ? ` ${badge}` : ''}
                                 </button>
-                            ))}
+                                );
+                            })}
                         </div>
 
                         {prLoading ? (
@@ -402,7 +397,7 @@ export default function PaymentRequestsPage() {
                                                             disabled={actionLoading === pr._id}
                                                             className="px-3 py-1.5 bg-emerald-500 text-white text-xs rounded-lg font-medium hover:bg-emerald-600 disabled:opacity-50 transition"
                                                         >
-                                                            {actionLoading === pr._id ? '...' : 'Approve'}
+                                                            {actionLoading === pr._id ? 'Paying…' : 'Pay'}
                                                         </button>
                                                         <button
                                                             onClick={() => handleDecline(pr._id)}
