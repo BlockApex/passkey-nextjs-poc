@@ -372,39 +372,26 @@ export function useRhinestoneTransfer() {
             });
             await rhinestoneAccount.waitForExecution(txResult);
 
-            // Resolve the REAL on-chain fill hash. `waitForExecution` returns
-            // before the fill hash surfaces for same-chain Plasma intents, so we
-            // poll the intent status (which carries `fill.hash`).
-            const intentId = (txResult as any).id;
-            let hash = '';
-            for (let i = 0; i < 10; i++) {
-                try {
-                    const st: any = await (rhinestoneAccount as any).getIntentStatus(intentId);
-                    if (st?.fill?.hash) { hash = st.fill.hash; break; }
-                    if (st?.status === 'FAILED') break;
-                } catch { /* transient — retry */ }
-                await new Promise((r) => setTimeout(r, 1000));
-            }
-            // Fallback: the intent id (still lets the backend record something).
-            if (!hash) hash = toHexHash(intentId) || 'submitted';
-
-            // 3. Complete — backend records the transfer (feed + counterparty).
+            // 3. Complete — send the intent id; the BACKEND resolves the real
+            //    on-chain fill hash (reliable) and records the transfer.
+            const intentId = toHexHash((txResult as any).id) || String((txResult as any).id);
             const completeRes = await signedFetch('/payments/complete', {
                 method: 'POST',
                 auth: true,
-                json: { prepareId: prepare.prepareId, hash },
+                json: { prepareId: prepare.prepareId, intentId },
                 headers: { 'ngrok-skip-browser-warning': 'true' },
             });
             if (!completeRes.ok) {
-                // On-chain send already succeeded — don't lose the hash if recording fails.
+                // On-chain send already succeeded — don't lose it if recording fails.
                 console.error(
                     '[pay] complete (record) failed:',
                     completeRes.status,
                     await completeRes.text(),
                 );
+                return { hash: intentId };
             }
-
-            return { hash };
+            const done = await completeRes.json();
+            return { hash: done.hash || intentId };
         } catch (err: any) {
             const message = err.message || 'Payment failed';
             setError(message);
@@ -463,28 +450,20 @@ export function useRhinestoneTransfer() {
             });
             await account.waitForExecution(txResult);
 
-            const intentId = (txResult as any).id;
-            let hash = '';
-            for (let i = 0; i < 10 && !hash; i++) {
-                try {
-                    const st: any = await (account as any).getIntentStatus(intentId);
-                    if (st?.fill?.hash) { hash = st.fill.hash; break; }
-                    if (st?.status === 'FAILED') break;
-                } catch { /* retry */ }
-                await new Promise((r) => setTimeout(r, 1000));
-            }
-            if (!hash) hash = toHexHash(intentId) || 'submitted';
-
+            // The backend resolves the real on-chain fill hash from the intent id.
+            const intentId = toHexHash((txResult as any).id) || String((txResult as any).id);
             const completeRes = await signedFetch('/move/complete', {
                 method: 'POST',
                 auth: true,
-                json: { prepareId: prepare.prepareId, hash },
+                json: { prepareId: prepare.prepareId, intentId },
                 headers: { 'ngrok-skip-browser-warning': 'true' },
             });
             if (!completeRes.ok) {
                 console.error('[move] complete (record) failed:', completeRes.status, await completeRes.text());
+                return { hash: intentId };
             }
-            return { hash };
+            const done = await completeRes.json();
+            return { hash: done.hash || intentId };
         } catch (err: any) {
             const message = err.message || 'Move failed';
             setError(message);
