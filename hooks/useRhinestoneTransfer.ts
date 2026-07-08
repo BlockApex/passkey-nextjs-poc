@@ -67,6 +67,21 @@ interface TransferResult {
     intentId?: string;
 }
 
+/** The swap quote returned by /swap/prepare (summary block). */
+interface SwapSummary {
+    from: { symbol: string; address: string; chainId: number; amount: string };
+    to: {
+        symbol: string; address: string; chainId: number;
+        estimatedOutput: string | null;
+        youReceive: string | null;
+    };
+    fee: string;
+    feeToken: string;
+    feeUsd: number | null;
+    networkFee: string;
+    quoteAvailable: boolean;
+}
+
 /**
  * Hook for sending EVM transfers via Rhinestone SDK with passkey signing.
  *
@@ -474,6 +489,35 @@ export function useRhinestoneTransfer() {
     }, [buildRhinestoneAccount]);
 
     /**
+     * Quote a swap without submitting — calls /swap/prepare, which quotes the
+     * intent server-side and returns the expected output, the net you'll receive
+     * (after the 0.1% fee, taken in the destination token) and the fee itself.
+     * Use it to show a "you'll receive ~X" preview before the user confirms.
+     */
+    const quoteSwap = useCallback(async (params: {
+        accessToken: string;
+        fromToken: string; fromSymbol: string; fromDecimals: number; fromChainId: number;
+        toToken: string; toSymbol: string; toDecimals: number; toChainId: number;
+        amount: string;
+    }): Promise<SwapSummary> => {
+        const res = await signedFetch('/swap/prepare', {
+            method: 'POST',
+            auth: true,
+            json: {
+                fromToken: params.fromToken, fromSymbol: params.fromSymbol,
+                fromDecimals: params.fromDecimals, fromChainId: params.fromChainId,
+                toToken: params.toToken, toSymbol: params.toSymbol,
+                toDecimals: params.toDecimals, toChainId: params.toChainId,
+                amount: params.amount,
+            },
+            headers: { 'ngrok-skip-browser-warning': 'true' },
+        });
+        if (!res.ok) throw new Error(`Quote failed: ${res.status} ${await res.text()}`);
+        const prepare = await res.json();
+        return prepare.summary as SwapSummary;
+    }, []);
+
+    /**
      * Swap a supported asset in Spot into ANY token, via a Rhinestone intent.
      * Backend returns the intent spec (sourceAssets = exact input, tokenRequests
      * = destination token with no amount → receive max); we build the Spot
@@ -576,6 +620,7 @@ export function useRhinestoneTransfer() {
         sendCrossChainTransfer,
         payViaBackend,
         moveViaBackend,
+        quoteSwap,
         swapViaBackend,
         getPortfolio,
         isSending,
