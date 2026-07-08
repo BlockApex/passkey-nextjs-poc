@@ -20,7 +20,7 @@ const FROM_PRESETS: Token[] = [
  */
 export default function SwapPage() {
     const router = useRouter();
-    const { swapViaBackend, isSending, error } = useRhinestoneTransfer();
+    const { quoteSwap, swapViaBackend, isSending, error } = useRhinestoneTransfer();
 
     const [accessToken, setAccessToken] = useState<string | null>(null);
     const [fromIdx, setFromIdx] = useState(0);
@@ -32,6 +32,8 @@ export default function SwapPage() {
     const [toChainId, setToChainId] = useState('8453');
     const [result, setResult] = useState<{ hash: string } | null>(null);
     const [localError, setLocalError] = useState<string | null>(null);
+    const [quote, setQuote] = useState<any>(null);
+    const [quoting, setQuoting] = useState(false);
 
     useEffect(() => {
         const token = localStorage.getItem('accessToken');
@@ -39,21 +41,40 @@ export default function SwapPage() {
         setAccessToken(token);
     }, [router]);
 
+    const params = () => {
+        const from = FROM_PRESETS[fromIdx];
+        return {
+            accessToken: accessToken!,
+            fromToken: from.address, fromSymbol: from.symbol, fromDecimals: from.decimals, fromChainId: from.chainId,
+            toToken: toToken.trim(), toSymbol: toSymbol.trim() || 'TOKEN',
+            toDecimals: parseInt(toDecimals) || 18, toChainId: parseInt(toChainId) || from.chainId,
+            amount: amount.trim(),
+        };
+    };
+
+    const handleQuote = async () => {
+        setResult(null); setLocalError(null); setQuote(null);
+        if (!accessToken) return;
+        if (!amount || !toToken) { setLocalError('Amount and destination token required'); return; }
+        setQuoting(true);
+        try {
+            setQuote(await quoteSwap(params()));
+        } catch (e: any) {
+            setLocalError(e?.message || 'Quote failed');
+        } finally {
+            setQuoting(false);
+        }
+    };
+
     const handleSwap = async () => {
         setResult(null);
         setLocalError(null);
         if (!accessToken) return;
         if (!amount || !toToken) { setLocalError('Amount and destination token required'); return; }
-        const from = FROM_PRESETS[fromIdx];
         try {
-            const res = await swapViaBackend({
-                accessToken,
-                fromToken: from.address, fromSymbol: from.symbol, fromDecimals: from.decimals, fromChainId: from.chainId,
-                toToken: toToken.trim(), toSymbol: toSymbol.trim() || 'TOKEN',
-                toDecimals: parseInt(toDecimals) || 18, toChainId: parseInt(toChainId) || from.chainId,
-                amount: amount.trim(),
-            });
+            const res = await swapViaBackend(params());
             setResult(res);
+            setQuote(null);
         } catch (e: any) {
             setLocalError(e?.message || 'Swap failed');
         }
@@ -89,9 +110,27 @@ export default function SwapPage() {
                     <input value={toToken} onChange={(e) => setToToken(e.target.value)} placeholder="0x token address" className={input + ' mt-2 font-mono text-xs'} />
                     <input value={toDecimals} onChange={(e) => setToDecimals(e.target.value)} placeholder="decimals (18)" className={input + ' mt-2'} />
 
-                    <button onClick={handleSwap} disabled={isSending} className="w-full mt-6 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold rounded-lg py-3 transition">
-                        {isSending ? 'Swapping…' : 'Swap'}
+                    <button onClick={handleQuote} disabled={quoting || isSending} className="w-full mt-6 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 disabled:opacity-60 font-semibold rounded-lg py-3 transition">
+                        {quoting ? 'Getting quote…' : 'Get quote'}
                     </button>
+
+                    {quote && (
+                        <div className="mt-4 bg-slate-50 border border-slate-200 rounded-lg p-4 text-sm text-slate-700">
+                            {quote.quoteAvailable ? (
+                                <>
+                                    <div className="flex justify-between"><span>You&apos;ll receive ≈</span><span className="font-semibold text-slate-900">{quote.to.youReceive} {quote.to.symbol}</span></div>
+                                    <div className="flex justify-between text-slate-500 mt-1"><span>Network + swap fees</span><span>{quote.feeUsd != null ? `~$${quote.feeUsd.toFixed(4)}` : 'included'}</span></div>
+                                    <div className="flex justify-between text-slate-500 mt-1"><span>Platform fee</span><span>0% (pending)</span></div>
+                                    <div className="flex justify-between text-slate-500 mt-1"><span>Gas</span><span>gasless</span></div>
+                                    <button onClick={handleSwap} disabled={isSending} className="w-full mt-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold rounded-lg py-3 transition">
+                                        {isSending ? 'Swapping…' : `Confirm swap`}
+                                    </button>
+                                </>
+                            ) : (
+                                <p className="text-amber-600">{quote.quoteReason || 'Couldn’t find a route for this swap.'}</p>
+                            )}
+                        </div>
+                    )}
 
                     {shown && <div className="mt-4 bg-red-50 text-red-600 text-sm rounded-lg p-3 break-words">{shown}</div>}
                     {result && (
