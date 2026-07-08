@@ -510,6 +510,7 @@ export function useRhinestoneTransfer() {
                 targetChainId: number;
                 sourceChainIds: number[];
                 sourceAssets: { chainId: number; address: string; amount: string }[];
+                calls: { to: string; value: string; data: string }[];
                 tokenRequests: { address: string }[];
             } = await prepareRes.json();
 
@@ -521,6 +522,12 @@ export function useRhinestoneTransfer() {
                     chain: getChainById(a.chainId),
                     address: a.address as `0x${string}`,
                     amount: BigInt(a.amount),
+                })),
+                // fee call (0.1% of input → collector), if any
+                calls: (prepare.calls || []).map((c) => ({
+                    to: c.to as `0x${string}`,
+                    value: BigInt(c.value),
+                    data: c.data as Hex,
                 })),
                 tokenRequests: prepare.tokenRequests.map((t) => ({
                     address: t.address as `0x${string}`,
