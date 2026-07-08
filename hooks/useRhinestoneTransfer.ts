@@ -474,6 +474,90 @@ export function useRhinestoneTransfer() {
     }, [buildRhinestoneAccount]);
 
     /**
+     * Swap a supported asset in Spot into ANY token, via a Rhinestone intent.
+     * Backend returns the intent spec (sourceAssets = exact input, tokenRequests
+     * = destination token with no amount → receive max); we build the Spot
+     * account, submit the intent (orchestrator quotes + routes), backend records.
+     * No DEX.
+     */
+    const swapViaBackend = useCallback(async (params: {
+        accessToken: string;
+        fromToken: string; fromSymbol: string; fromDecimals: number; fromChainId: number;
+        toToken: string; toSymbol: string; toDecimals: number; toChainId: number;
+        amount: string;
+    }): Promise<TransferResult> => {
+        setIsSending(true);
+        setError(null);
+
+        try {
+            const prepareRes = await signedFetch('/swap/prepare', {
+                method: 'POST',
+                auth: true,
+                json: {
+                    fromToken: params.fromToken, fromSymbol: params.fromSymbol,
+                    fromDecimals: params.fromDecimals, fromChainId: params.fromChainId,
+                    toToken: params.toToken, toSymbol: params.toSymbol,
+                    toDecimals: params.toDecimals, toChainId: params.toChainId,
+                    amount: params.amount,
+                },
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+            });
+            if (!prepareRes.ok) {
+                throw new Error(`Prepare failed: ${prepareRes.status} ${await prepareRes.text()}`);
+            }
+            const prepare: {
+                prepareId: string;
+                targetChainId: number;
+                sourceChainIds: number[];
+                sourceAssets: { chainId: number; address: string; amount: string }[];
+                calls: { to: string; value: string; data: string }[];
+                tokenRequests: { address: string }[];
+            } = await prepareRes.json();
+
+            const account = await buildRhinestoneAccount(params.accessToken, 'spot');
+            const txResult = await account.sendTransaction({
+                sourceChains: prepare.sourceChainIds.map(getChainById),
+                targetChain: getChainById(prepare.targetChainId),
+                sourceAssets: prepare.sourceAssets.map((a) => ({
+                    chain: getChainById(a.chainId),
+                    address: a.address as `0x${string}`,
+                    amount: BigInt(a.amount),
+                })),
+                // fee call (0.1% of input → collector), if any
+                calls: (prepare.calls || []).map((c) => ({
+                    to: c.to as `0x${string}`,
+                    value: BigInt(c.value),
+                    data: c.data as Hex,
+                })),
+                tokenRequests: prepare.tokenRequests.map((t) => ({
+                    address: t.address as `0x${string}`,
+                })),
+            } as any);
+            await account.waitForExecution(txResult);
+
+            const intentId = toHexHash((txResult as any).id) || String((txResult as any).id);
+            const completeRes = await signedFetch('/swap/complete', {
+                method: 'POST',
+                auth: true,
+                json: { prepareId: prepare.prepareId, intentId },
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+            });
+            if (!completeRes.ok) {
+                console.error('[swap] complete failed:', completeRes.status, await completeRes.text());
+                return { hash: intentId };
+            }
+            const done = await completeRes.json();
+            return { hash: done.hash || intentId };
+        } catch (err: any) {
+            const message = err.message || 'Swap failed';
+            setError(message);
+            throw err;
+        } finally {
+            setIsSending(false);
+        }
+    }, [buildRhinestoneAccount]);
+
+    /**
      * Get the portfolio (token balances across all chains) for the user's account.
      */
     const getPortfolio = useCallback(async (params: {
@@ -492,6 +576,7 @@ export function useRhinestoneTransfer() {
         sendCrossChainTransfer,
         payViaBackend,
         moveViaBackend,
+        swapViaBackend,
         getPortfolio,
         isSending,
         error,
