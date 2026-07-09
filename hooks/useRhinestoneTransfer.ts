@@ -6,6 +6,7 @@ import { toWebAuthnAccount } from 'viem/account-abstraction';
 import {
     encodeFunctionData,
     erc20Abi,
+    maxUint256,
     parseUnits,
     type Hex,
     type Chain,
@@ -13,6 +14,9 @@ import {
 import * as viemChains from 'viem/chains';
 import { plasma, plasmaTestnet, PLASMA_USDT0_ADDRESS } from '@/lib/chains/plasma';
 import { signedFetch } from '@/lib/api/signedFetch';
+
+/** Canonical Permit2 — the spender a Rhinestone intent's source claim pulls through. */
+const PERMIT2_ADDRESS = '0x000000000022D473030F116dDEE9F6B43aC78BA3' as `0x${string}`;
 
 /** Check if a chain ID is a Plasma chain */
 function isPlasmaChain(chainId: number): boolean {
@@ -74,12 +78,15 @@ interface SwapSummary {
         symbol: string; address: string; chainId: number;
         estimatedOutput: string | null;
         youReceive: string | null;
+        guaranteed?: boolean;
     };
     fee: string;
     feeToken: string;
     feeUsd: number | null;
+    slippageBps?: number;
     networkFee: string;
     quoteAvailable: boolean;
+    quoteReason?: string | null;
 }
 
 /**
@@ -489,6 +496,50 @@ export function useRhinestoneTransfer() {
     }, [buildRhinestoneAccount]);
 
     /**
+     * Activate the Spot account on Plasma — approve Permit2 to spend USDT0.
+     * Because this is the account's FIRST outgoing action on Plasma, the UserOp
+     * also DEPLOYS it. Uses the same gasless direct-UserOp path the Money wallet
+     * already uses on Plasma (no bundler/orchestrator there; USDT0 ops sponsored).
+     *
+     * One-time: after this, Spot is a deployed, Permit2-approved account on Plasma,
+     * so a cross-chain intent can source from it — the intent's claim does a
+     * Permit2 transferFrom on Plasma, which needs exactly this deploy + approval
+     * (both were missing, which is why the swap-from-Plasma claim failed).
+     */
+    const activateSpotOnPlasma = useCallback(async (params: {
+        accessToken: string;
+    }): Promise<TransferResult> => {
+        setIsSending(true);
+        setError(null);
+        try {
+            const account = await buildRhinestoneAccount(params.accessToken, 'spot');
+            const data = encodeFunctionData({
+                abi: erc20Abi,
+                functionName: 'approve',
+                args: [PERMIT2_ADDRESS, maxUint256],
+            });
+            // Use sendTransaction (NOT sendUserOperation) — on Plasma the raw
+            // user-op path tries pimlico gas estimation, which doesn't support the
+            // chain ("undefined.fast"). Move uses this same path and works.
+            const txResult = await account.sendTransaction({
+                chain: plasma,
+                calls: [{ to: PLASMA_USDT0_ADDRESS as `0x${string}`, value: BigInt(0), data }],
+            } as any);
+            const receipt = await account.waitForExecution(txResult);
+            return {
+                hash: toHexHash((receipt as any)?.transactionHash)
+                    || toHexHash((txResult as any)?.id) || 'submitted',
+            };
+        } catch (err: any) {
+            const message = err?.message || 'Activation failed';
+            setError(message);
+            throw err;
+        } finally {
+            setIsSending(false);
+        }
+    }, [buildRhinestoneAccount]);
+
+    /**
      * Quote a swap without submitting — calls /swap/prepare, which quotes the
      * intent server-side and returns the expected output, the net you'll receive
      * (after the 0.1% fee, taken in the destination token) and the fee itself.
@@ -553,21 +604,16 @@ export function useRhinestoneTransfer() {
                 prepareId: string;
                 targetChainId: number;
                 sourceChainIds: number[];
-                sourceAssets: { chainId: number; address: string; amount: string }[];
                 calls: { to: string; value: string; data: string }[];
-                tokenRequests: { address: string }[];
+                tokenRequests: { address: string; amount?: string }[];
             } = await prepareRes.json();
 
             const account = await buildRhinestoneAccount(params.accessToken, 'spot');
             const txResult = await account.sendTransaction({
                 sourceChains: prepare.sourceChainIds.map(getChainById),
                 targetChain: getChainById(prepare.targetChainId),
-                sourceAssets: prepare.sourceAssets.map((a) => ({
-                    chain: getChainById(a.chainId),
-                    address: a.address as `0x${string}`,
-                    amount: BigInt(a.amount),
-                })),
-                // fee call (0.1% of input → collector), if any
+                // Per Rhinestone swap docs: NO sourceAssets — Warp auto-selects the
+                // input from balances. tokenRequests carries the OUTPUT + exact amount.
                 calls: (prepare.calls || []).map((c) => ({
                     to: c.to as `0x${string}`,
                     value: BigInt(c.value),
@@ -575,6 +621,7 @@ export function useRhinestoneTransfer() {
                 })),
                 tokenRequests: prepare.tokenRequests.map((t) => ({
                     address: t.address as `0x${string}`,
+                    ...(t.amount ? { amount: BigInt(t.amount) } : {}),
                 })),
             } as any);
             await account.waitForExecution(txResult);
@@ -620,6 +667,7 @@ export function useRhinestoneTransfer() {
         sendCrossChainTransfer,
         payViaBackend,
         moveViaBackend,
+        activateSpotOnPlasma,
         quoteSwap,
         swapViaBackend,
         getPortfolio,

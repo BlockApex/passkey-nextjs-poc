@@ -20,7 +20,7 @@ const FROM_PRESETS: Token[] = [
  */
 export default function SwapPage() {
     const router = useRouter();
-    const { quoteSwap, swapViaBackend, isSending, error } = useRhinestoneTransfer();
+    const { activateSpotOnPlasma, quoteSwap, swapViaBackend, isSending, error } = useRhinestoneTransfer();
 
     const [accessToken, setAccessToken] = useState<string | null>(null);
     const [fromIdx, setFromIdx] = useState(0);
@@ -50,6 +50,23 @@ export default function SwapPage() {
             toDecimals: parseInt(toDecimals) || 18, toChainId: parseInt(toChainId) || from.chainId,
             amount: amount.trim(),
         };
+    };
+
+    const [activating, setActivating] = useState(false);
+    const [activated, setActivated] = useState<string | null>(null);
+
+    const handleActivate = async () => {
+        setResult(null); setLocalError(null); setActivated(null);
+        if (!accessToken) return;
+        setActivating(true);
+        try {
+            const res = await activateSpotOnPlasma({ accessToken });
+            setActivated(res.hash);
+        } catch (e: any) {
+            setLocalError(e?.message || 'Activation failed');
+        } finally {
+            setActivating(false);
+        }
     };
 
     const handleQuote = async () => {
@@ -92,6 +109,18 @@ export default function SwapPage() {
                     <h1 className="text-xl font-bold text-slate-900">Swap</h1>
                     <p className="text-sm text-slate-500 mt-1">Spot · supported asset → any token · via Rhinestone intent</p>
 
+                    {/* One-time: deploy + Permit2-approve the Spot account on Plasma so it can
+                        be used as a swap source. Needed only for Plasma-held USDT0. */}
+                    <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                        <p className="text-xs text-amber-800">Sourcing from Plasma USDT0? Activate Spot on Plasma once first (deploys + approves it).</p>
+                        <button onClick={handleActivate} disabled={activating || isSending} className="mt-2 w-full border border-amber-500 text-amber-800 hover:bg-amber-100 disabled:opacity-60 text-sm font-semibold rounded-lg py-2 transition">
+                            {activating ? 'Activating…' : 'Activate Spot on Plasma (one-time)'}
+                        </button>
+                        {activated && (
+                            <a href={`https://plasmascan.to/tx/${activated}`} target="_blank" rel="noreferrer" className="mt-2 block text-xs text-emerald-700 underline break-all">Activated ✓ {activated}</a>
+                        )}
+                    </div>
+
                     <label className="block text-sm font-medium text-slate-700 mt-6 mb-1">From (spend)</label>
                     <select value={fromIdx} onChange={(e) => setFromIdx(parseInt(e.target.value))} className={input}>
                         {FROM_PRESETS.map((t, i) => (
@@ -119,9 +148,8 @@ export default function SwapPage() {
                             {quote.quoteAvailable ? (
                                 <>
                                     <div className="flex justify-between"><span>You&apos;ll receive ≈</span><span className="font-semibold text-slate-900">{quote.to.youReceive} {quote.to.symbol}</span></div>
-                                    <div className="flex justify-between text-slate-500 mt-1"><span>Network + swap fees</span><span>{quote.feeUsd != null ? `~$${quote.feeUsd.toFixed(4)}` : 'included'}</span></div>
-                                    <div className="flex justify-between text-slate-500 mt-1"><span>Platform fee</span><span>0% (pending)</span></div>
-                                    <div className="flex justify-between text-slate-500 mt-1"><span>Gas</span><span>gasless</span></div>
+                                    <div className="flex justify-between text-slate-500 mt-1"><span>Network + bridge cost</span><span>{quote.feeUsd != null ? `~$${quote.feeUsd.toFixed(4)} (included)` : 'included'}</span></div>
+                                    <div className="flex justify-between text-slate-500 mt-1"><span>Gas</span><span>you pay none</span></div>
                                     <button onClick={handleSwap} disabled={isSending} className="w-full mt-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold rounded-lg py-3 transition">
                                         {isSending ? 'Swapping…' : `Confirm swap`}
                                     </button>
