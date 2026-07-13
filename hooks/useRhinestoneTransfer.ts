@@ -496,6 +496,107 @@ export function useRhinestoneTransfer() {
     }, [buildRhinestoneAccount]);
 
     /**
+     * Withdraw to an external EVM address. Backend prepares the calls + tells us
+     * which wallet signs (`signWith`): Money withdraws USDT0 on Plasma, Spot
+     * withdraws the chosen asset on its own chain. We submit one intent with that
+     * passkey account; the backend records it. Fee is deducted (dest gets amount − fee).
+     */
+    const withdrawViaBackend = useCallback(async (params: {
+        accessToken: string;
+        walletType: 'money' | 'spot';
+        toAddress: string;
+        amount: string;
+        symbol?: string;
+        chainId?: number;
+    }): Promise<TransferResult> => {
+        setIsSending(true);
+        setError(null);
+
+        try {
+            const prepareRes = await signedFetch('/withdraw/prepare', {
+                method: 'POST',
+                auth: true,
+                json: {
+                    walletType: params.walletType,
+                    toAddress: params.toAddress.trim(),
+                    amount: params.amount,
+                    ...(params.symbol ? { symbol: params.symbol } : {}),
+                    ...(params.chainId ? { chainId: params.chainId } : {}),
+                },
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+            });
+            if (!prepareRes.ok) {
+                throw new Error(`Prepare failed: ${prepareRes.status} ${await prepareRes.text()}`);
+            }
+            const prepare: {
+                prepareId: string;
+                chainId: number;
+                signWith: 'money' | 'spot';
+                calls: { to: string; value: string; data: string }[];
+                tokenRequests: { address: string; amount: string }[];
+            } = await prepareRes.json();
+
+            // Sign with the wallet the backend chose (money or spot).
+            const account = await buildRhinestoneAccount(params.accessToken, prepare.signWith);
+            const chain = getChainById(prepare.chainId);
+            const calls = prepare.calls.map((c) => ({
+                to: c.to as `0x${string}`,
+                value: BigInt(c.value),
+                data: c.data as Hex,
+            }));
+
+            // Withdraw is always same-chain. Plasma routes through the intent path
+            // (sendTransaction + tokenRequests — the move-proven path; the raw
+            // user-op path hits pimlico's "undefined.fast" on Plasma). Every other
+            // chain must use a direct user-op: same-chain on the intents path 422s
+            // with INSUFFICIENT_LIQUIDITY (same as the claim flow).
+            let intentId: string;
+            if (isPlasmaChain(prepare.chainId)) {
+                const txResult = await account.sendTransaction({
+                    chain,
+                    calls,
+                    tokenRequests: prepare.tokenRequests.map((t) => ({
+                        address: t.address as `0x${string}`,
+                        amount: BigInt(t.amount),
+                    })),
+                });
+                await account.waitForExecution(txResult);
+                // Intent id — the backend resolves the real on-chain fill hash from it.
+                intentId = toHexHash((txResult as any).id) || String((txResult as any).id);
+            } else {
+                // Non-Plasma same-chain: sponsored intent so Rhinestone covers gas
+                // (the spot account may hold 0 native). No tokenRequests — the account
+                // already holds the asset, so there's nothing to source; passing them
+                // makes the same-chain fill 422 on liquidity.
+                const txResult = await account.sendTransaction({ chain, calls, sponsored: true });
+                const receipt = await account.waitForExecution(txResult);
+                intentId =
+                    toHexHash((receipt as any)?.transactionHash) ||
+                    toHexHash((txResult as any).id) ||
+                    String((txResult as any).id);
+            }
+            const completeRes = await signedFetch('/withdraw/complete', {
+                method: 'POST',
+                auth: true,
+                json: { prepareId: prepare.prepareId, intentId },
+                headers: { 'ngrok-skip-browser-warning': 'true' },
+            });
+            if (!completeRes.ok) {
+                console.error('[withdraw] complete (record) failed:', completeRes.status, await completeRes.text());
+                return { hash: intentId };
+            }
+            const done = await completeRes.json();
+            return { hash: done.hash || intentId };
+        } catch (err: any) {
+            const message = err.message || 'Withdraw failed';
+            setError(message);
+            throw err;
+        } finally {
+            setIsSending(false);
+        }
+    }, [buildRhinestoneAccount]);
+
+    /**
      * Activate the Spot account on Plasma — approve Permit2 to spend USDT0.
      * Because this is the account's FIRST outgoing action on Plasma, the UserOp
      * also DEPLOYS it. Uses the same gasless direct-UserOp path the Money wallet
@@ -667,6 +768,7 @@ export function useRhinestoneTransfer() {
         sendCrossChainTransfer,
         payViaBackend,
         moveViaBackend,
+        withdrawViaBackend,
         activateSpotOnPlasma,
         quoteSwap,
         swapViaBackend,
