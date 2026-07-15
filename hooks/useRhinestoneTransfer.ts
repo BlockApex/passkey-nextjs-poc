@@ -24,6 +24,18 @@ function isPlasmaChain(chainId: number): boolean {
 }
 
 /**
+ * v2: `sendTransaction` is gone. Prepare → sign → submit an intent in one call,
+ * mirroring the old one-shot. The caller still runs `waitForExecution` on the
+ * returned result, exactly as before. `signTransaction` triggers the passkey
+ * prompt (the same UX `sendTransaction` had in v1).
+ */
+async function sendTx(account: any, tx: any) {
+    const prepared = await account.prepareTransaction(tx);
+    const signed = await account.signTransaction(prepared);
+    return account.submitTransaction(signed);
+}
+
+/**
  * Safely convert a tx hash value (BigInt, number, or string) to a 0x-prefixed hex string.
  */
 function toHexHash(value: any): string | null {
@@ -197,7 +209,7 @@ export function useRhinestoneTransfer() {
 
             if (params.tokenAddress === 'native') {
                 // Native ETH transfer
-                const txResult = await rhinestoneAccount.sendTransaction({
+                const txResult = await sendTx(rhinestoneAccount,{
                     chain,
                     calls: [{
                         to: params.to as `0x${string}`,
@@ -242,7 +254,7 @@ export function useRhinestoneTransfer() {
             }
 
             // Non-Plasma ERC-20: use sendTransaction (orchestrator/intents)
-            const txResult = await rhinestoneAccount.sendTransaction({
+            const txResult = await sendTx(rhinestoneAccount,{
                 chain,
                 calls: [{
                     to: params.tokenAddress as `0x${string}`,
@@ -299,7 +311,7 @@ export function useRhinestoneTransfer() {
                 args: [params.to as `0x${string}`, amountWei],
             });
 
-            const txResult = await rhinestoneAccount.sendTransaction({
+            const txResult = await sendTx(rhinestoneAccount,{
                 sourceChains,
                 targetChain,
                 calls: [{
@@ -380,7 +392,7 @@ export function useRhinestoneTransfer() {
                 'money',
             );
             const chain = getChainById(prepare.chainId);
-            const txResult = await rhinestoneAccount.sendTransaction({
+            const txResult = await sendTx(rhinestoneAccount,{
                 chain,
                 calls: prepare.calls.map((c) => ({
                     to: c.to as `0x${string}`,
@@ -458,7 +470,7 @@ export function useRhinestoneTransfer() {
             // Sign with the wallet the backend chose (money for →Spot, spot for →Money).
             const account = await buildRhinestoneAccount(params.accessToken, prepare.signWith);
             const chain = getChainById(prepare.chainId);
-            const txResult = await account.sendTransaction({
+            const txResult = await sendTx(account,{
                 chain,
                 calls: prepare.calls.map((c) => ({
                     to: c.to as `0x${string}`,
@@ -552,7 +564,7 @@ export function useRhinestoneTransfer() {
             // with INSUFFICIENT_LIQUIDITY (same as the claim flow).
             let intentId: string;
             if (isPlasmaChain(prepare.chainId)) {
-                const txResult = await account.sendTransaction({
+                const txResult = await sendTx(account,{
                     chain,
                     calls,
                     tokenRequests: prepare.tokenRequests.map((t) => ({
@@ -568,7 +580,7 @@ export function useRhinestoneTransfer() {
                 // (the spot account may hold 0 native). No tokenRequests — the account
                 // already holds the asset, so there's nothing to source; passing them
                 // makes the same-chain fill 422 on liquidity.
-                const txResult = await account.sendTransaction({ chain, calls, sponsored: true });
+                const txResult = await sendTx(account,{ chain, calls, sponsored: true });
                 const receipt = await account.waitForExecution(txResult);
                 intentId =
                     toHexHash((receipt as any)?.transactionHash) ||
@@ -622,7 +634,7 @@ export function useRhinestoneTransfer() {
             // Use sendTransaction (NOT sendUserOperation) — on Plasma the raw
             // user-op path tries pimlico gas estimation, which doesn't support the
             // chain ("undefined.fast"). Move uses this same path and works.
-            const txResult = await account.sendTransaction({
+            const txResult = await sendTx(account,{
                 chain: plasma,
                 calls: [{ to: PLASMA_USDT0_ADDRESS as `0x${string}`, value: BigInt(0), data }],
             } as any);
@@ -710,7 +722,7 @@ export function useRhinestoneTransfer() {
             } = await prepareRes.json();
 
             const account = await buildRhinestoneAccount(params.accessToken, 'spot');
-            const txResult = await account.sendTransaction({
+            const txResult = await sendTx(account,{
                 sourceChains: prepare.sourceChainIds.map(getChainById),
                 targetChain: getChainById(prepare.targetChainId),
                 // Per Rhinestone swap docs: NO sourceAssets — Warp auto-selects the

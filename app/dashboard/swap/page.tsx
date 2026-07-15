@@ -8,6 +8,7 @@ type Token = { symbol: string; address: string; decimals: number; chainId: numbe
 
 // A few known source assets to swap FROM (held in Spot).
 const FROM_PRESETS: Token[] = [
+    { symbol: 'DAI', address: '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb', decimals: 18, chainId: 8453 }, // Base
     { symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6, chainId: 8453 }, // Base
     { symbol: 'USDT0', address: '0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb', decimals: 6, chainId: 9745 }, // Plasma
     { symbol: 'WETH', address: '0x4200000000000000000000000000000000000006', decimals: 18, chainId: 8453 }, // Base
@@ -25,11 +26,12 @@ export default function SwapPage() {
     const [accessToken, setAccessToken] = useState<string | null>(null);
     const [fromIdx, setFromIdx] = useState(0);
     const [amount, setAmount] = useState('');
-    // destination (any token) — defaults to LINK on Base
+    // destination (any token) — defaults to LINK on Arbitrum (cross-chain, which
+    // is what routes; same-chain Base->Base swaps don't route via the orchestrator)
     const [toSymbol, setToSymbol] = useState('LINK');
-    const [toToken, setToToken] = useState('0x88Fb150BDc53A65fe94Dea0c9BA0a6dAf8C6e196');
+    const [toToken, setToToken] = useState('0xf97f4df75117a78c1A5a0DBb814Af92458539FB4');
     const [toDecimals, setToDecimals] = useState('18');
-    const [toChainId, setToChainId] = useState('8453');
+    const [toChainId, setToChainId] = useState('42161');
     const [result, setResult] = useState<{ hash: string } | null>(null);
     const [localError, setLocalError] = useState<string | null>(null);
     const [quote, setQuote] = useState<any>(null);
