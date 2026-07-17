@@ -331,7 +331,7 @@ export function useRhinestoneTransfer() {
                     toHexHash((receipt as any)?.transactionHash) ||
                     toHexHash((txResult as any)?.id) ||
                     'submitted',
-                intentId: toHexHash((txResult as any)?.id) || undefined,
+                intentId: (txResult as any)?.id != null ? String((txResult as any).id) : undefined,
             };
         } catch (err: any) {
             const message = err.message || 'Cross-chain transfer failed';
@@ -408,7 +408,10 @@ export function useRhinestoneTransfer() {
 
             // 3. Complete — send the intent id; the BACKEND resolves the real
             //    on-chain fill hash (reliable) and records the transfer.
-            const intentId = toHexHash((txResult as any).id) || String((txResult as any).id);
+            // intent id is a DECIMAL string — send it raw. toHexHash would
+            // prefix `0x`, which the backend then reads as hex → wrong id → the
+            // "intent not found" bug.
+            const intentId = String((txResult as any).id);
             const completeRes = await signedFetch('/payments/complete', {
                 method: 'POST',
                 auth: true,
@@ -485,7 +488,10 @@ export function useRhinestoneTransfer() {
             await account.waitForExecution(txResult);
 
             // The backend resolves the real on-chain fill hash from the intent id.
-            const intentId = toHexHash((txResult as any).id) || String((txResult as any).id);
+            // intent id is a DECIMAL string — send it raw. toHexHash would
+            // prefix `0x`, which the backend then reads as hex → wrong id → the
+            // "intent not found" bug.
+            const intentId = String((txResult as any).id);
             const completeRes = await signedFetch('/move/complete', {
                 method: 'POST',
                 auth: true,
@@ -573,8 +579,9 @@ export function useRhinestoneTransfer() {
                     })),
                 });
                 await account.waitForExecution(txResult);
-                // Intent id — the backend resolves the real on-chain fill hash from it.
-                intentId = toHexHash((txResult as any).id) || String((txResult as any).id);
+                // Intent id is a DECIMAL string — send it raw. toHexHash would
+                // prefix `0x` → backend reads it as hex → wrong id → "not found".
+                intentId = String((txResult as any).id);
             } else {
                 // Non-Plasma same-chain: sponsored intent so Rhinestone covers gas
                 // (the spot account may hold 0 native). No tokenRequests — the account
@@ -582,9 +589,11 @@ export function useRhinestoneTransfer() {
                 // makes the same-chain fill 422 on liquidity.
                 const txResult = await sendTx(account,{ chain, calls, sponsored: true });
                 const receipt = await account.waitForExecution(txResult);
+                // Sponsored user-op: the receipt carries the real tx hash. Fall
+                // back to the raw DECIMAL intent id (never toHexHash it → 0x
+                // prefix would be read as hex → wrong id).
                 intentId =
                     toHexHash((receipt as any)?.transactionHash) ||
-                    toHexHash((txResult as any).id) ||
                     String((txResult as any).id);
             }
             const completeRes = await signedFetch('/withdraw/complete', {
@@ -719,14 +728,23 @@ export function useRhinestoneTransfer() {
                 sourceChainIds: number[];
                 calls: { to: string; value: string; data: string }[];
                 tokenRequests: { address: string; amount?: string }[];
+                sourceAssets?: { chainId: number; address: string; amount: string }[];
             } = await prepareRes.json();
 
             const account = await buildRhinestoneAccount(params.accessToken, 'spot');
             const txResult = await sendTx(account,{
                 sourceChains: prepare.sourceChainIds.map(getChainById),
                 targetChain: getChainById(prepare.targetChainId),
-                // Per Rhinestone swap docs: NO sourceAssets — Warp auto-selects the
-                // input from balances. tokenRequests carries the OUTPUT + exact amount.
+                // Exact-input: declare the source asset explicitly (matches the
+                // working quote) so the orchestrator finds the balance, instead of
+                // relying on Warp auto-pick — which zero-balances a fresh account.
+                ...(prepare.sourceAssets?.length ? {
+                    sourceAssets: prepare.sourceAssets.map((a) => ({
+                        chain: getChainById(a.chainId),
+                        address: a.address as `0x${string}`,
+                        amount: BigInt(a.amount),
+                    })),
+                } : {}),
                 calls: (prepare.calls || []).map((c) => ({
                     to: c.to as `0x${string}`,
                     value: BigInt(c.value),
@@ -739,7 +757,10 @@ export function useRhinestoneTransfer() {
             } as any);
             await account.waitForExecution(txResult);
 
-            const intentId = toHexHash((txResult as any).id) || String((txResult as any).id);
+            // intent id is a DECIMAL string — send it raw. toHexHash would
+            // prefix `0x`, which the backend then reads as hex → wrong id → the
+            // "intent not found" bug.
+            const intentId = String((txResult as any).id);
             const completeRes = await signedFetch('/swap/complete', {
                 method: 'POST',
                 auth: true,
@@ -775,6 +796,35 @@ export function useRhinestoneTransfer() {
         return rhinestoneAccount.getPortfolio();
     }, [buildRhinestoneAccount]);
 
+    /**
+     * TEMP (deposit debug): deploy a wallet on a chain up front, so its FIRST
+     * deposit bridge only has to enable+use the deposit session on an already
+     * deployed account (the path that works) instead of deploy+enable in one tx
+     * (which fails InvalidSignature). Sponsored/gasless — passkey signs.
+     */
+    const deployWallet = useCallback(async (params: {
+        accessToken: string;
+        walletType: 'spot' | 'money';
+        chainId: number;
+    }) => {
+        setError(null);
+        setIsSending(true);
+        try {
+            const account = await buildRhinestoneAccount(
+                params.accessToken,
+                params.walletType,
+            );
+            const chain = getChainById(params.chainId);
+            const deployed = await account.deploy(chain, { sponsored: true });
+            return { deployed, address: account.getAddress() };
+        } catch (err: any) {
+            setError(err.message || 'Deploy failed');
+            throw err;
+        } finally {
+            setIsSending(false);
+        }
+    }, [buildRhinestoneAccount]);
+
     return {
         sendEvmTransfer,
         sendCrossChainTransfer,
@@ -785,6 +835,7 @@ export function useRhinestoneTransfer() {
         quoteSwap,
         swapViaBackend,
         getPortfolio,
+        deployWallet,
         isSending,
         error,
     };

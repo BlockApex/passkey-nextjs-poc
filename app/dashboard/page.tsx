@@ -7,6 +7,7 @@ import OfframpModal from './components/OfframpModal';
 // TransactionHistoryList removed — history is now a dedicated page at /dashboard/history
 import { useDepositRegistration } from '@/hooks/useDepositRegistration';
 import { useSweepEnable } from '@/hooks/useSweepEnable';
+import { useRhinestoneTransfer } from '@/hooks/useRhinestoneTransfer';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useExtendSession } from '@/hooks/useExtendSession';
 import { signedFetch } from '@/lib/api/signedFetch';
@@ -157,6 +158,8 @@ export default function DashboardPage() {
     const [depositMessage, setDepositMessage] = useState<string | null>(null);
     const { registerForDeposits, isRegistering, error: depositError } = useDepositRegistration();
     const { enableSweep, isEnabling, error: sweepError } = useSweepEnable();
+    const { deployWallet, isSending: isDeploying } = useRhinestoneTransfer();
+    const [deployMessage, setDeployMessage] = useState<string | null>(null);
     const [sweepEnabled, setSweepEnabled] = useState(false);
     const [sweepMessage, setSweepMessage] = useState<string | null>(null);
     const { status: sessionStatus, refresh: refreshSessionStatus } = useSessionStatus();
@@ -616,6 +619,36 @@ export default function DashboardPage() {
                                                     <p className="text-xs mt-1 text-red-600">{depositError}</p>
                                                 )}
                                             </div>
+                                        )}
+                                    </div>
+
+                                    {/* TEMP (deposit debug): pre-deploy the Money wallet on Base so the
+                                        first deposit only enables the session, not deploy+enable in one tx. */}
+                                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <p className="text-sm font-semibold text-amber-800">Deploy Money Wallet (Base)</p>
+                                                <p className="text-xs text-amber-600">One-time: install the wallet on-chain before the first deposit</p>
+                                            </div>
+                                            <button
+                                                onClick={async () => {
+                                                    if (!accessToken) return;
+                                                    setDeployMessage(null);
+                                                    try {
+                                                        const r = await deployWallet({ accessToken, walletType: 'money', chainId: 8453 });
+                                                        setDeployMessage(`deployed=${r.deployed} — ${r.address}`);
+                                                    } catch (err: any) {
+                                                        setDeployMessage(err?.message || 'Deploy failed');
+                                                    }
+                                                }}
+                                                disabled={isDeploying || !accessToken}
+                                                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50"
+                                            >
+                                                {isDeploying ? 'Deploying…' : '🚀 Deploy'}
+                                            </button>
+                                        </div>
+                                        {deployMessage && (
+                                            <p className="text-xs mt-2 text-amber-700 break-all">{deployMessage}</p>
                                         )}
                                     </div>
 
