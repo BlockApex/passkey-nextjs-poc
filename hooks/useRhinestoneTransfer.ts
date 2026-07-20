@@ -618,6 +618,94 @@ export function useRhinestoneTransfer() {
     }, [buildRhinestoneAccount]);
 
     /**
+     * Fund an off-ramp payment: move the exact deposit amount from the wallet the
+     * backend chose (Spot on Base for the USDC path) to Walapay's deposit address,
+     * passkey-signed. Same prepare → sign+submit → complete shape as withdraw; the
+     * paymentId lives in the URL so complete only needs the intentId.
+     */
+    const fundOfframpViaBackend = useCallback(async (params: {
+        accessToken: string;
+        paymentId: string;
+    }): Promise<TransferResult> => {
+        setIsSending(true);
+        setError(null);
+        try {
+            const prepareRes = await signedFetch(
+                `/offramp/payment/${params.paymentId}/fund/prepare`,
+                {
+                    method: 'POST',
+                    auth: true,
+                    headers: { 'ngrok-skip-browser-warning': 'true' },
+                },
+            );
+            if (!prepareRes.ok) {
+                throw new Error(`Prepare failed: ${prepareRes.status} ${await prepareRes.text()}`);
+            }
+            const prepare: {
+                paymentId: string;
+                chainId: number;
+                signWith: 'money' | 'spot';
+                calls: { to: string; value: string; data: string }[];
+                tokenRequests: { address: string; amount: string }[];
+            } = await prepareRes.json();
+
+            // Sign with the wallet the backend chose (spot for Base/USDC).
+            const account = await buildRhinestoneAccount(params.accessToken, prepare.signWith);
+            const chain = getChainById(prepare.chainId);
+            const calls = prepare.calls.map((c) => ({
+                to: c.to as `0x${string}`,
+                value: BigInt(c.value),
+                data: c.data as Hex,
+            }));
+
+            // Same-chain funding — same branching as withdraw. Plasma routes through
+            // the intent path (tokenRequests); Base (the default) uses a sponsored
+            // direct user-op, so Rhinestone covers gas and no tokenRequests are sent.
+            let intentId: string;
+            if (isPlasmaChain(prepare.chainId)) {
+                const txResult = await sendTx(account, {
+                    chain,
+                    calls,
+                    tokenRequests: prepare.tokenRequests.map((t) => ({
+                        address: t.address as `0x${string}`,
+                        amount: BigInt(t.amount),
+                    })),
+                });
+                await account.waitForExecution(txResult);
+                intentId = String((txResult as any).id);
+            } else {
+                const txResult = await sendTx(account, { chain, calls, sponsored: true });
+                const receipt = await account.waitForExecution(txResult);
+                intentId =
+                    toHexHash((receipt as any)?.transactionHash) ||
+                    String((txResult as any).id);
+            }
+
+            const completeRes = await signedFetch(
+                `/offramp/payment/${params.paymentId}/fund/complete`,
+                {
+                    method: 'POST',
+                    auth: true,
+                    json: { intentId },
+                    headers: { 'ngrok-skip-browser-warning': 'true' },
+                },
+            );
+            if (!completeRes.ok) {
+                console.error('[offramp fund] complete failed:', completeRes.status, await completeRes.text());
+                return { hash: intentId };
+            }
+            const done = await completeRes.json();
+            return { hash: done.fundingTxHash || done.hash || intentId };
+        } catch (err: any) {
+            const message = err.message || 'Off-ramp funding failed';
+            setError(message);
+            throw err;
+        } finally {
+            setIsSending(false);
+        }
+    }, [buildRhinestoneAccount]);
+
+    /**
      * Activate the Spot account on Plasma — approve Permit2 to spend USDT0.
      * Because this is the account's FIRST outgoing action on Plasma, the UserOp
      * also DEPLOYS it. Uses the same gasless direct-UserOp path the Money wallet
@@ -831,6 +919,7 @@ export function useRhinestoneTransfer() {
         payViaBackend,
         moveViaBackend,
         withdrawViaBackend,
+        fundOfframpViaBackend,
         activateSpotOnPlasma,
         quoteSwap,
         swapViaBackend,
