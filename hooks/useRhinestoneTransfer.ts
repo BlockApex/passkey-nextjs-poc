@@ -167,12 +167,15 @@ export function useRhinestoneTransfer() {
                 type: 'nexus',
                 salt: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
             };
-            // CRITICAL: the backend derives the Money account with sessions
-            // enabled, and sessions change the CREATE2 address. Without this the
-            // SDK derives a DIFFERENT, unfunded account (confirmed w/ Rhinestone:
-            // the intent was built for the sessions-off address which had 0 funds).
-            accountConfig.experimental_sessions = { enabled: true };
         }
+        // CRITICAL: BOTH wallets are derived with sessions enabled, and sessions
+        // change the CREATE2 address. Money always was; Spot became sessions-
+        // enabled after the spot→sessions migration (so it's registrable for
+        // auto-deposit). Without this the SDK derives a DIFFERENT, unfunded
+        // account (confirmed w/ Rhinestone: the intent was built for the
+        // sessions-off address which had 0 funds — the AA21 "didn't pay prefund"
+        // and "insufficient balance" errors on spot withdraw/activate).
+        accountConfig.experimental_sessions = { enabled: true };
 
         const rhinestoneAccount = await rhinestone.createAccount(accountConfig);
         return rhinestoneAccount;
@@ -750,6 +753,69 @@ export function useRhinestoneTransfer() {
     }, [buildRhinestoneAccount]);
 
     /**
+     * Activate the Spot account on ANY chain — deploy it + approve Permit2 to
+     * spend the given tokens. Generalizes {@link activateSpotOnPlasma} to Base /
+     * Arbitrum / etc. via the orchestrator (sponsored, call-only intent: an
+     * `approve` moves no funds, so it needs no prior Permit2 approval — it just
+     * deploys the account on its first outgoing action and sets the approvals).
+     *
+     * Required ONCE per (chain, token) before the orchestrator can source funds
+     * from Spot on that chain (withdraw / swap / move) — the intent's claim does
+     * a Permit2 `transferFrom`, which needs exactly this deploy + approval.
+     */
+    const activateSpotOnChain = useCallback(async (params: {
+        accessToken: string;
+        chainId: number;
+        tokenAddresses: string[];
+    }): Promise<TransferResult> => {
+        setIsSending(true);
+        setError(null);
+        try {
+            if (!params.tokenAddresses.length) {
+                throw new Error('No tokens to approve');
+            }
+            const account = await buildRhinestoneAccount(params.accessToken, 'spot');
+            const chain = Object.values(viemChains).find(
+                (c: any) => c?.id === params.chainId,
+            );
+            if (!chain) {
+                throw new Error(`Chain ${params.chainId} not found in viem/chains`);
+            }
+            const calls = params.tokenAddresses.map((token) => ({
+                to: token as `0x${string}`,
+                value: BigInt(0),
+                data: encodeFunctionData({
+                    abi: erc20Abi,
+                    functionName: 'approve',
+                    args: [PERMIT2_ADDRESS, maxUint256],
+                }),
+            }));
+            // DIRECT user-op (NOT the orchestrator): an approve moves no funds,
+            // so it can't route through the intents path (which sources via
+            // Permit2 — the very thing we're bootstrapping). `sendUserOperation`
+            // deploys the account on its first action + runs the approvals.
+            // Gas is paid from the account's own balance (needs a little ETH on
+            // the chain) — `sponsored` isn't wired to a paymaster on this path
+            // yet (production TODO: configure a paymaster so no ETH is needed).
+            const txResult = await account.sendUserOperation({
+                chain,
+                calls,
+            } as any);
+            const receipt = await account.waitForExecution(txResult);
+            return {
+                hash: toHexHash((receipt as any)?.transactionHash)
+                    || toHexHash((txResult as any)?.id) || 'submitted',
+            };
+        } catch (err: any) {
+            const message = err?.message || 'Spot activation failed';
+            setError(message);
+            throw err;
+        } finally {
+            setIsSending(false);
+        }
+    }, [buildRhinestoneAccount]);
+
+    /**
      * Quote a swap without submitting — calls /swap/prepare, which quotes the
      * intent server-side and returns the expected output, the net you'll receive
      * (after the 0.1% fee, taken in the destination token) and the fee itself.
@@ -921,6 +987,7 @@ export function useRhinestoneTransfer() {
         withdrawViaBackend,
         fundOfframpViaBackend,
         activateSpotOnPlasma,
+        activateSpotOnChain,
         quoteSwap,
         swapViaBackend,
         getPortfolio,
