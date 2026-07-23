@@ -25,6 +25,35 @@ export default function Home() {
 
         <div className="space-y-4">
           <Link
+            href="/guest"
+            className="block p-6 bg-gradient-to-r from-orange-500 to-amber-500 rounded-xl shadow-lg hover:shadow-xl transition-all hover:scale-[1.02] group"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-white mb-2">
+                  🧪 Try App (Guest)
+                </h2>
+                <p className="text-orange-100">
+                  Play Store reviewer sign-in — no passkey (androidTest)
+                </p>
+              </div>
+              <svg
+                className="w-8 h-8 text-white group-hover:translate-x-2 transition-transform"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M13 7l5 5m0 0l-5 5m5-5H6"
+                />
+              </svg>
+            </div>
+          </Link>
+
+          <Link
             href="/phase1/onboarding"
             className="block p-6 bg-gradient-to-r from-purple-500 to-indigo-500 rounded-xl shadow-lg hover:shadow-xl transition-all hover:scale-[1.02] group"
           >

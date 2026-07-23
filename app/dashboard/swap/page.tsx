@@ -6,9 +6,25 @@ import { useRhinestoneTransfer } from '@/hooks/useRhinestoneTransfer';
 
 type Token = { symbol: string; address: string; decimals: number; chainId: number };
 
+/** Chain-aware block-explorer link. A swap fills on the TARGET chain, so the
+ *  result link must resolve there — not a hardcoded Plasma explorer. */
+function getExplorerTxUrl(chainId: number | undefined, hash: string): string {
+    switch (chainId) {
+        case 9745: return `https://plasmascan.to/tx/${hash}`;
+        case 1: return `https://etherscan.io/tx/${hash}`;
+        case 8453: return `https://basescan.org/tx/${hash}`;
+        case 42161: return `https://arbiscan.io/tx/${hash}`;
+        case 10: return `https://optimistic.etherscan.io/tx/${hash}`;
+        case 137: return `https://polygonscan.com/tx/${hash}`;
+        default: return `https://basescan.org/tx/${hash}`;
+    }
+}
+
 // A few known source assets to swap FROM (held in Spot).
 const FROM_PRESETS: Token[] = [
+    { symbol: 'DAI', address: '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb', decimals: 18, chainId: 8453 }, // Base
     { symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6, chainId: 8453 }, // Base
+    { symbol: 'USDT', address: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2', decimals: 6, chainId: 8453 }, // Base
     { symbol: 'USDT0', address: '0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb', decimals: 6, chainId: 9745 }, // Plasma
     { symbol: 'WETH', address: '0x4200000000000000000000000000000000000006', decimals: 18, chainId: 8453 }, // Base
 ];
@@ -25,11 +41,12 @@ export default function SwapPage() {
     const [accessToken, setAccessToken] = useState<string | null>(null);
     const [fromIdx, setFromIdx] = useState(0);
     const [amount, setAmount] = useState('');
-    // destination (any token) — defaults to LINK on Base
+    // destination (any token) — defaults to LINK on Arbitrum (cross-chain, which
+    // is what routes; same-chain Base->Base swaps don't route via the orchestrator)
     const [toSymbol, setToSymbol] = useState('LINK');
-    const [toToken, setToToken] = useState('0x88Fb150BDc53A65fe94Dea0c9BA0a6dAf8C6e196');
+    const [toToken, setToToken] = useState('0xf97f4df75117a78c1A5a0DBb814Af92458539FB4');
     const [toDecimals, setToDecimals] = useState('18');
-    const [toChainId, setToChainId] = useState('8453');
+    const [toChainId, setToChainId] = useState('42161');
     const [result, setResult] = useState<{ hash: string } | null>(null);
     const [localError, setLocalError] = useState<string | null>(null);
     const [quote, setQuote] = useState<any>(null);
@@ -164,7 +181,7 @@ export default function SwapPage() {
                     {result && (
                         <div className="mt-4 bg-emerald-50 text-emerald-700 text-sm rounded-lg p-3">
                             <p className="font-semibold">Swapped ✓</p>
-                            <a href={`https://plasmascan.to/tx/${result.hash}`} target="_blank" rel="noreferrer" className="font-mono text-xs underline break-all">{result.hash}</a>
+                            <a href={getExplorerTxUrl(Number(toChainId), result.hash)} target="_blank" rel="noreferrer" className="font-mono text-xs underline break-all">{result.hash}</a>
                         </div>
                     )}
                 </div>

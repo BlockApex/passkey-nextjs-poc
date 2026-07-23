@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { signedFetch } from '@/lib/api/signedFetch';
+import { useRhinestoneTransfer } from '@/hooks/useRhinestoneTransfer';
 
 interface OfframpModalProps {
     isOpen: boolean;
@@ -41,8 +42,10 @@ const DEST_RAIL_MAP: Record<string, string> = {
 
 const getDestRail = (currency: string) => DEST_RAIL_MAP[currency] || 'LOCAL';
 
-export default function OfframpModal({ isOpen, onClose, token }: OfframpModalProps) {
+export default function OfframpModal({ isOpen, onClose, token, accessToken }: OfframpModalProps) {
+    const { fundOfframpViaBackend } = useRhinestoneTransfer();
     const [step, setStep] = useState<Step>('check');
+    const [fundHash, setFundHash] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
@@ -127,6 +130,7 @@ export default function OfframpModal({ isOpen, onClose, token }: OfframpModalPro
         setRate(null);
         setFundingInstructions(null);
         setPaymentId('');
+        setFundHash('');
         setSelectedBankId('');
         setShowAddBank(false);
     };
@@ -344,16 +348,21 @@ export default function OfframpModal({ isOpen, onClose, token }: OfframpModalPro
         try {
             const rail = token?.type === 'svm' ? 'SOLANA' : (CHAIN_RAIL_MAP[token?.chainId || 0] || 'POLYGON');
 
-            // Get the user's wallet address for fromAddress
-            let fromAddress = '';
-            try {
-                const walletData = localStorage.getItem('wallet');
-                if (walletData) {
-                    const wallet = JSON.parse(walletData);
-                    fromAddress = token?.type === 'svm' ? wallet?.svm?.address : wallet?.evm?.address;
+            // fromAddress MUST be the wallet that actually holds the source token
+            // (the Spot wallet on Base for USDC) — the backend picks the signing
+            // wallet by matching it. token.address is that holding address; fall
+            // back to localStorage only if it's somehow missing.
+            let fromAddress = token?.address || '';
+            if (!fromAddress) {
+                try {
+                    const walletData = localStorage.getItem('wallet');
+                    if (walletData) {
+                        const wallet = JSON.parse(walletData);
+                        fromAddress = token?.type === 'svm' ? wallet?.svm?.address : wallet?.evm?.address;
+                    }
+                } catch (e) {
+                    console.error('Error getting wallet address:', e);
                 }
-            } catch (e) {
-                console.error('Error getting wallet address:', e);
             }
 
             const res = await signedFetch('/offramp/payment', {
@@ -381,6 +390,23 @@ export default function OfframpModal({ isOpen, onClose, token }: OfframpModalPro
             setStep('funding');
         } catch (err: any) {
             setError(err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // ==========================================
+    // Step 5: Fund the payment from the wallet (passkey-signed)
+    // ==========================================
+    const fundPayment = async () => {
+        if (!paymentId) return;
+        setLoading(true);
+        setError('');
+        try {
+            const res = await fundOfframpViaBackend({ accessToken, paymentId });
+            setFundHash(res.hash);
+        } catch (err: any) {
+            setError(err.message || 'Funding failed');
         } finally {
             setLoading(false);
         }
@@ -797,36 +823,56 @@ export default function OfframpModal({ isOpen, onClose, token }: OfframpModalPro
                     )}
 
                     {/* ==================== FUNDING INSTRUCTIONS ==================== */}
-                    {step === 'funding' && fundingInstructions && (
+                    {step === 'funding' && fundingInstructions && !fundHash && (
+                        <div className="space-y-4 text-center">
+                            <h3 className="text-lg font-bold text-slate-900">Fund your off-ramp</h3>
+                            <p className="text-sm text-slate-500">
+                                Send <strong>{fundingInstructions.amount} {fundingInstructions.currencyCode}</strong> on <strong>{fundingInstructions.chain}</strong> from your wallet to complete the payout.
+                            </p>
+
+                            <button
+                                onClick={fundPayment}
+                                disabled={loading}
+                                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg font-semibold transition">
+                                {loading
+                                    ? 'Funding…'
+                                    : `Fund ${fundingInstructions.amount} ${fundingInstructions.currencyCode} from wallet`}
+                            </button>
+
+                            <details className="text-left">
+                                <summary className="text-xs text-slate-500 cursor-pointer">Or send manually</summary>
+                                <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mt-2">
+                                    <p className="text-xs text-slate-500 mb-2">Deposit Address ({fundingInstructions.chain})</p>
+                                    <code className="text-sm text-slate-900 break-all font-mono">
+                                        {fundingInstructions.toAddress}
+                                    </code>
+                                    <button
+                                        onClick={() => navigator.clipboard.writeText(fundingInstructions.toAddress)}
+                                        className="mt-2 block text-xs text-emerald-600 hover:text-emerald-700 font-medium">
+                                        📋 Copy Address
+                                    </button>
+                                    <p className="text-xs text-amber-700 mt-2">
+                                        ⚠️ Send exactly <strong>{fundingInstructions.amount} {fundingInstructions.currencyCode}</strong> on <strong>{fundingInstructions.chain}</strong>.
+                                    </p>
+                                </div>
+                            </details>
+                        </div>
+                    )}
+
+                    {step === 'funding' && fundHash && (
                         <div className="space-y-4 text-center">
                             <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto">
                                 <svg className="w-8 h-8 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                                 </svg>
                             </div>
-                            <h3 className="text-lg font-bold text-slate-900">Payment Created!</h3>
+                            <h3 className="text-lg font-bold text-slate-900">Funded!</h3>
                             <p className="text-sm text-slate-500">
-                                Send <strong>{fundingInstructions.amount} {fundingInstructions.currencyCode}</strong> to the address below within <strong>15 minutes</strong>.
+                                Your payout is on its way. Track its status in payment history.
                             </p>
-
-                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-                                <p className="text-xs text-slate-500 mb-2">Deposit Address ({fundingInstructions.chain})</p>
-                                <code className="text-sm text-slate-900 break-all font-mono">
-                                    {fundingInstructions.toAddress}
-                                </code>
-                                <button
-                                    onClick={() => navigator.clipboard.writeText(fundingInstructions.toAddress)}
-                                    className="mt-2 text-xs text-emerald-600 hover:text-emerald-700 font-medium">
-                                    📋 Copy Address
-                                </button>
-                            </div>
-
-                            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                                <p className="text-xs text-amber-800">
-                                    ⚠️ Send exactly <strong>{fundingInstructions.amount} {fundingInstructions.currencyCode}</strong> on <strong>{fundingInstructions.chain}</strong>. Sending the wrong amount or chain may result in loss of funds.
-                                </p>
-                            </div>
-
+                            <code className="text-xs text-slate-500 break-all font-mono block bg-slate-50 rounded-lg p-2">
+                                {fundHash}
+                            </code>
                             <button onClick={handleClose}
                                 className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white rounded-lg font-semibold transition">
                                 Done

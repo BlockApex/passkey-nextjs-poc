@@ -24,6 +24,18 @@ function isPlasmaChain(chainId: number): boolean {
 }
 
 /**
+ * v2: `sendTransaction` is gone. Prepare → sign → submit an intent in one call,
+ * mirroring the old one-shot. The caller still runs `waitForExecution` on the
+ * returned result, exactly as before. `signTransaction` triggers the passkey
+ * prompt (the same UX `sendTransaction` had in v1).
+ */
+async function sendTx(account: any, tx: any) {
+    const prepared = await account.prepareTransaction(tx);
+    const signed = await account.signTransaction(prepared);
+    return account.submitTransaction(signed);
+}
+
+/**
  * Safely convert a tx hash value (BigInt, number, or string) to a 0x-prefixed hex string.
  */
 function toHexHash(value: any): string | null {
@@ -155,12 +167,15 @@ export function useRhinestoneTransfer() {
                 type: 'nexus',
                 salt: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
             };
-            // CRITICAL: the backend derives the Money account with sessions
-            // enabled, and sessions change the CREATE2 address. Without this the
-            // SDK derives a DIFFERENT, unfunded account (confirmed w/ Rhinestone:
-            // the intent was built for the sessions-off address which had 0 funds).
-            accountConfig.experimental_sessions = { enabled: true };
         }
+        // CRITICAL: BOTH wallets are derived with sessions enabled, and sessions
+        // change the CREATE2 address. Money always was; Spot became sessions-
+        // enabled after the spot→sessions migration (so it's registrable for
+        // auto-deposit). Without this the SDK derives a DIFFERENT, unfunded
+        // account (confirmed w/ Rhinestone: the intent was built for the
+        // sessions-off address which had 0 funds — the AA21 "didn't pay prefund"
+        // and "insufficient balance" errors on spot withdraw/activate).
+        accountConfig.experimental_sessions = { enabled: true };
 
         const rhinestoneAccount = await rhinestone.createAccount(accountConfig);
         return rhinestoneAccount;
@@ -197,7 +212,7 @@ export function useRhinestoneTransfer() {
 
             if (params.tokenAddress === 'native') {
                 // Native ETH transfer
-                const txResult = await rhinestoneAccount.sendTransaction({
+                const txResult = await sendTx(rhinestoneAccount,{
                     chain,
                     calls: [{
                         to: params.to as `0x${string}`,
@@ -242,7 +257,7 @@ export function useRhinestoneTransfer() {
             }
 
             // Non-Plasma ERC-20: use sendTransaction (orchestrator/intents)
-            const txResult = await rhinestoneAccount.sendTransaction({
+            const txResult = await sendTx(rhinestoneAccount,{
                 chain,
                 calls: [{
                     to: params.tokenAddress as `0x${string}`,
@@ -299,7 +314,7 @@ export function useRhinestoneTransfer() {
                 args: [params.to as `0x${string}`, amountWei],
             });
 
-            const txResult = await rhinestoneAccount.sendTransaction({
+            const txResult = await sendTx(rhinestoneAccount,{
                 sourceChains,
                 targetChain,
                 calls: [{
@@ -319,7 +334,7 @@ export function useRhinestoneTransfer() {
                     toHexHash((receipt as any)?.transactionHash) ||
                     toHexHash((txResult as any)?.id) ||
                     'submitted',
-                intentId: toHexHash((txResult as any)?.id) || undefined,
+                intentId: (txResult as any)?.id != null ? String((txResult as any).id) : undefined,
             };
         } catch (err: any) {
             const message = err.message || 'Cross-chain transfer failed';
@@ -380,7 +395,7 @@ export function useRhinestoneTransfer() {
                 'money',
             );
             const chain = getChainById(prepare.chainId);
-            const txResult = await rhinestoneAccount.sendTransaction({
+            const txResult = await sendTx(rhinestoneAccount,{
                 chain,
                 calls: prepare.calls.map((c) => ({
                     to: c.to as `0x${string}`,
@@ -396,7 +411,10 @@ export function useRhinestoneTransfer() {
 
             // 3. Complete — send the intent id; the BACKEND resolves the real
             //    on-chain fill hash (reliable) and records the transfer.
-            const intentId = toHexHash((txResult as any).id) || String((txResult as any).id);
+            // intent id is a DECIMAL string — send it raw. toHexHash would
+            // prefix `0x`, which the backend then reads as hex → wrong id → the
+            // "intent not found" bug.
+            const intentId = String((txResult as any).id);
             const completeRes = await signedFetch('/payments/complete', {
                 method: 'POST',
                 auth: true,
@@ -458,7 +476,7 @@ export function useRhinestoneTransfer() {
             // Sign with the wallet the backend chose (money for →Spot, spot for →Money).
             const account = await buildRhinestoneAccount(params.accessToken, prepare.signWith);
             const chain = getChainById(prepare.chainId);
-            const txResult = await account.sendTransaction({
+            const txResult = await sendTx(account,{
                 chain,
                 calls: prepare.calls.map((c) => ({
                     to: c.to as `0x${string}`,
@@ -473,7 +491,10 @@ export function useRhinestoneTransfer() {
             await account.waitForExecution(txResult);
 
             // The backend resolves the real on-chain fill hash from the intent id.
-            const intentId = toHexHash((txResult as any).id) || String((txResult as any).id);
+            // intent id is a DECIMAL string — send it raw. toHexHash would
+            // prefix `0x`, which the backend then reads as hex → wrong id → the
+            // "intent not found" bug.
+            const intentId = String((txResult as any).id);
             const completeRes = await signedFetch('/move/complete', {
                 method: 'POST',
                 auth: true,
@@ -552,7 +573,7 @@ export function useRhinestoneTransfer() {
             // with INSUFFICIENT_LIQUIDITY (same as the claim flow).
             let intentId: string;
             if (isPlasmaChain(prepare.chainId)) {
-                const txResult = await account.sendTransaction({
+                const txResult = await sendTx(account,{
                     chain,
                     calls,
                     tokenRequests: prepare.tokenRequests.map((t) => ({
@@ -561,18 +582,21 @@ export function useRhinestoneTransfer() {
                     })),
                 });
                 await account.waitForExecution(txResult);
-                // Intent id — the backend resolves the real on-chain fill hash from it.
-                intentId = toHexHash((txResult as any).id) || String((txResult as any).id);
+                // Intent id is a DECIMAL string — send it raw. toHexHash would
+                // prefix `0x` → backend reads it as hex → wrong id → "not found".
+                intentId = String((txResult as any).id);
             } else {
                 // Non-Plasma same-chain: sponsored intent so Rhinestone covers gas
                 // (the spot account may hold 0 native). No tokenRequests — the account
                 // already holds the asset, so there's nothing to source; passing them
                 // makes the same-chain fill 422 on liquidity.
-                const txResult = await account.sendTransaction({ chain, calls, sponsored: true });
+                const txResult = await sendTx(account,{ chain, calls, sponsored: true });
                 const receipt = await account.waitForExecution(txResult);
+                // Sponsored user-op: the receipt carries the real tx hash. Fall
+                // back to the raw DECIMAL intent id (never toHexHash it → 0x
+                // prefix would be read as hex → wrong id).
                 intentId =
                     toHexHash((receipt as any)?.transactionHash) ||
-                    toHexHash((txResult as any).id) ||
                     String((txResult as any).id);
             }
             const completeRes = await signedFetch('/withdraw/complete', {
@@ -589,6 +613,94 @@ export function useRhinestoneTransfer() {
             return { hash: done.hash || intentId };
         } catch (err: any) {
             const message = err.message || 'Withdraw failed';
+            setError(message);
+            throw err;
+        } finally {
+            setIsSending(false);
+        }
+    }, [buildRhinestoneAccount]);
+
+    /**
+     * Fund an off-ramp payment: move the exact deposit amount from the wallet the
+     * backend chose (Spot on Base for the USDC path) to Walapay's deposit address,
+     * passkey-signed. Same prepare → sign+submit → complete shape as withdraw; the
+     * paymentId lives in the URL so complete only needs the intentId.
+     */
+    const fundOfframpViaBackend = useCallback(async (params: {
+        accessToken: string;
+        paymentId: string;
+    }): Promise<TransferResult> => {
+        setIsSending(true);
+        setError(null);
+        try {
+            const prepareRes = await signedFetch(
+                `/offramp/payment/${params.paymentId}/fund/prepare`,
+                {
+                    method: 'POST',
+                    auth: true,
+                    headers: { 'ngrok-skip-browser-warning': 'true' },
+                },
+            );
+            if (!prepareRes.ok) {
+                throw new Error(`Prepare failed: ${prepareRes.status} ${await prepareRes.text()}`);
+            }
+            const prepare: {
+                paymentId: string;
+                chainId: number;
+                signWith: 'money' | 'spot';
+                calls: { to: string; value: string; data: string }[];
+                tokenRequests: { address: string; amount: string }[];
+            } = await prepareRes.json();
+
+            // Sign with the wallet the backend chose (spot for Base/USDC).
+            const account = await buildRhinestoneAccount(params.accessToken, prepare.signWith);
+            const chain = getChainById(prepare.chainId);
+            const calls = prepare.calls.map((c) => ({
+                to: c.to as `0x${string}`,
+                value: BigInt(c.value),
+                data: c.data as Hex,
+            }));
+
+            // Same-chain funding — same branching as withdraw. Plasma routes through
+            // the intent path (tokenRequests); Base (the default) uses a sponsored
+            // direct user-op, so Rhinestone covers gas and no tokenRequests are sent.
+            let intentId: string;
+            if (isPlasmaChain(prepare.chainId)) {
+                const txResult = await sendTx(account, {
+                    chain,
+                    calls,
+                    tokenRequests: prepare.tokenRequests.map((t) => ({
+                        address: t.address as `0x${string}`,
+                        amount: BigInt(t.amount),
+                    })),
+                });
+                await account.waitForExecution(txResult);
+                intentId = String((txResult as any).id);
+            } else {
+                const txResult = await sendTx(account, { chain, calls, sponsored: true });
+                const receipt = await account.waitForExecution(txResult);
+                intentId =
+                    toHexHash((receipt as any)?.transactionHash) ||
+                    String((txResult as any).id);
+            }
+
+            const completeRes = await signedFetch(
+                `/offramp/payment/${params.paymentId}/fund/complete`,
+                {
+                    method: 'POST',
+                    auth: true,
+                    json: { intentId },
+                    headers: { 'ngrok-skip-browser-warning': 'true' },
+                },
+            );
+            if (!completeRes.ok) {
+                console.error('[offramp fund] complete failed:', completeRes.status, await completeRes.text());
+                return { hash: intentId };
+            }
+            const done = await completeRes.json();
+            return { hash: done.fundingTxHash || done.hash || intentId };
+        } catch (err: any) {
+            const message = err.message || 'Off-ramp funding failed';
             setError(message);
             throw err;
         } finally {
@@ -622,7 +734,7 @@ export function useRhinestoneTransfer() {
             // Use sendTransaction (NOT sendUserOperation) — on Plasma the raw
             // user-op path tries pimlico gas estimation, which doesn't support the
             // chain ("undefined.fast"). Move uses this same path and works.
-            const txResult = await account.sendTransaction({
+            const txResult = await sendTx(account,{
                 chain: plasma,
                 calls: [{ to: PLASMA_USDT0_ADDRESS as `0x${string}`, value: BigInt(0), data }],
             } as any);
@@ -633,6 +745,69 @@ export function useRhinestoneTransfer() {
             };
         } catch (err: any) {
             const message = err?.message || 'Activation failed';
+            setError(message);
+            throw err;
+        } finally {
+            setIsSending(false);
+        }
+    }, [buildRhinestoneAccount]);
+
+    /**
+     * Activate the Spot account on ANY chain — deploy it + approve Permit2 to
+     * spend the given tokens. Generalizes {@link activateSpotOnPlasma} to Base /
+     * Arbitrum / etc. via the orchestrator (sponsored, call-only intent: an
+     * `approve` moves no funds, so it needs no prior Permit2 approval — it just
+     * deploys the account on its first outgoing action and sets the approvals).
+     *
+     * Required ONCE per (chain, token) before the orchestrator can source funds
+     * from Spot on that chain (withdraw / swap / move) — the intent's claim does
+     * a Permit2 `transferFrom`, which needs exactly this deploy + approval.
+     */
+    const activateSpotOnChain = useCallback(async (params: {
+        accessToken: string;
+        chainId: number;
+        tokenAddresses: string[];
+    }): Promise<TransferResult> => {
+        setIsSending(true);
+        setError(null);
+        try {
+            if (!params.tokenAddresses.length) {
+                throw new Error('No tokens to approve');
+            }
+            const account = await buildRhinestoneAccount(params.accessToken, 'spot');
+            const chain = Object.values(viemChains).find(
+                (c: any) => c?.id === params.chainId,
+            );
+            if (!chain) {
+                throw new Error(`Chain ${params.chainId} not found in viem/chains`);
+            }
+            const calls = params.tokenAddresses.map((token) => ({
+                to: token as `0x${string}`,
+                value: BigInt(0),
+                data: encodeFunctionData({
+                    abi: erc20Abi,
+                    functionName: 'approve',
+                    args: [PERMIT2_ADDRESS, maxUint256],
+                }),
+            }));
+            // DIRECT user-op (NOT the orchestrator): an approve moves no funds,
+            // so it can't route through the intents path (which sources via
+            // Permit2 — the very thing we're bootstrapping). `sendUserOperation`
+            // deploys the account on its first action + runs the approvals.
+            // Gas is paid from the account's own balance (needs a little ETH on
+            // the chain) — `sponsored` isn't wired to a paymaster on this path
+            // yet (production TODO: configure a paymaster so no ETH is needed).
+            const txResult = await account.sendUserOperation({
+                chain,
+                calls,
+            } as any);
+            const receipt = await account.waitForExecution(txResult);
+            return {
+                hash: toHexHash((receipt as any)?.transactionHash)
+                    || toHexHash((txResult as any)?.id) || 'submitted',
+            };
+        } catch (err: any) {
+            const message = err?.message || 'Spot activation failed';
             setError(message);
             throw err;
         } finally {
@@ -707,14 +882,23 @@ export function useRhinestoneTransfer() {
                 sourceChainIds: number[];
                 calls: { to: string; value: string; data: string }[];
                 tokenRequests: { address: string; amount?: string }[];
+                sourceAssets?: { chainId: number; address: string; amount: string }[];
             } = await prepareRes.json();
 
             const account = await buildRhinestoneAccount(params.accessToken, 'spot');
-            const txResult = await account.sendTransaction({
+            const txResult = await sendTx(account,{
                 sourceChains: prepare.sourceChainIds.map(getChainById),
                 targetChain: getChainById(prepare.targetChainId),
-                // Per Rhinestone swap docs: NO sourceAssets — Warp auto-selects the
-                // input from balances. tokenRequests carries the OUTPUT + exact amount.
+                // Exact-input: declare the source asset explicitly (matches the
+                // working quote) so the orchestrator finds the balance, instead of
+                // relying on Warp auto-pick — which zero-balances a fresh account.
+                ...(prepare.sourceAssets?.length ? {
+                    sourceAssets: prepare.sourceAssets.map((a) => ({
+                        chain: getChainById(a.chainId),
+                        address: a.address as `0x${string}`,
+                        amount: BigInt(a.amount),
+                    })),
+                } : {}),
                 calls: (prepare.calls || []).map((c) => ({
                     to: c.to as `0x${string}`,
                     value: BigInt(c.value),
@@ -727,7 +911,10 @@ export function useRhinestoneTransfer() {
             } as any);
             await account.waitForExecution(txResult);
 
-            const intentId = toHexHash((txResult as any).id) || String((txResult as any).id);
+            // intent id is a DECIMAL string — send it raw. toHexHash would
+            // prefix `0x`, which the backend then reads as hex → wrong id → the
+            // "intent not found" bug.
+            const intentId = String((txResult as any).id);
             const completeRes = await signedFetch('/swap/complete', {
                 method: 'POST',
                 auth: true,
@@ -763,16 +950,48 @@ export function useRhinestoneTransfer() {
         return rhinestoneAccount.getPortfolio();
     }, [buildRhinestoneAccount]);
 
+    /**
+     * TEMP (deposit debug): deploy a wallet on a chain up front, so its FIRST
+     * deposit bridge only has to enable+use the deposit session on an already
+     * deployed account (the path that works) instead of deploy+enable in one tx
+     * (which fails InvalidSignature). Sponsored/gasless — passkey signs.
+     */
+    const deployWallet = useCallback(async (params: {
+        accessToken: string;
+        walletType: 'spot' | 'money';
+        chainId: number;
+    }) => {
+        setError(null);
+        setIsSending(true);
+        try {
+            const account = await buildRhinestoneAccount(
+                params.accessToken,
+                params.walletType,
+            );
+            const chain = getChainById(params.chainId);
+            const deployed = await account.deploy(chain, { sponsored: true });
+            return { deployed, address: account.getAddress() };
+        } catch (err: any) {
+            setError(err.message || 'Deploy failed');
+            throw err;
+        } finally {
+            setIsSending(false);
+        }
+    }, [buildRhinestoneAccount]);
+
     return {
         sendEvmTransfer,
         sendCrossChainTransfer,
         payViaBackend,
         moveViaBackend,
         withdrawViaBackend,
+        fundOfframpViaBackend,
         activateSpotOnPlasma,
+        activateSpotOnChain,
         quoteSwap,
         swapViaBackend,
         getPortfolio,
+        deployWallet,
         isSending,
         error,
     };

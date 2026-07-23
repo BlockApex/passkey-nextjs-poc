@@ -6,7 +6,9 @@ import TransferModal from './components/TransferModal';
 import OfframpModal from './components/OfframpModal';
 // TransactionHistoryList removed — history is now a dedicated page at /dashboard/history
 import { useDepositRegistration } from '@/hooks/useDepositRegistration';
+import { useSpotDepositRegistration } from '@/hooks/useSpotDepositRegistration';
 import { useSweepEnable } from '@/hooks/useSweepEnable';
+import { useRhinestoneTransfer } from '@/hooks/useRhinestoneTransfer';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useExtendSession } from '@/hooks/useExtendSession';
 import { signedFetch } from '@/lib/api/signedFetch';
@@ -156,7 +158,13 @@ export default function DashboardPage() {
     const [depositRegistered, setDepositRegistered] = useState(false);
     const [depositMessage, setDepositMessage] = useState<string | null>(null);
     const { registerForDeposits, isRegistering, error: depositError } = useDepositRegistration();
+    const { registerForSpotDeposits, isRegistering: isSpotRegistering, error: spotDepositError } = useSpotDepositRegistration();
+    const [spotDepositMessage, setSpotDepositMessage] = useState<string | null>(null);
+    const [spotDepositAddress, setSpotDepositAddress] = useState<string | null>(null);
     const { enableSweep, isEnabling, error: sweepError } = useSweepEnable();
+    const { deployWallet, activateSpotOnChain, isSending: isDeploying } = useRhinestoneTransfer();
+    const [activateMessage, setActivateMessage] = useState<string | null>(null);
+    const [deployMessage, setDeployMessage] = useState<string | null>(null);
     const [sweepEnabled, setSweepEnabled] = useState(false);
     const [sweepMessage, setSweepMessage] = useState<string | null>(null);
     const { status: sessionStatus, refresh: refreshSessionStatus } = useSessionStatus();
@@ -616,6 +624,135 @@ export default function DashboardPage() {
                                                     <p className="text-xs mt-1 text-red-600">{depositError}</p>
                                                 )}
                                             </div>
+                                        )}
+                                    </div>
+
+                                    {/* Spot Auto-Deposit — settle whitelisted assets as their own token on Base */}
+                                    <div className="p-4 bg-sky-50 border border-sky-200 rounded-lg">
+                                        {spotDepositAddress ? (
+                                            <div>
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-8 h-8 bg-sky-100 rounded-full flex items-center justify-center text-sky-700">✓</div>
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-sky-800">Spot Auto-Deposit Enabled</p>
+                                                        <p className="text-xs text-sky-600">Whitelisted assets sent to your spot deposit address settle as that asset on Base</p>
+                                                    </div>
+                                                </div>
+                                                <p className="text-xs text-sky-700 mt-2 break-all">
+                                                    <span className="font-semibold">Deposit address:</span> {spotDepositAddress}
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div>
+                                                <div className="flex items-center justify-between">
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-sky-800">Enable Spot Auto-Deposit</p>
+                                                        <p className="text-xs text-sky-600">Deposit ETH/BTC/USDC/USDT/DAI from Eth/Polygon/BNB/Arbitrum → settles as that asset on Base</p>
+                                                    </div>
+                                                    <button
+                                                        onClick={async () => {
+                                                            if (!accessToken) return;
+                                                            setSpotDepositMessage(null);
+                                                            try {
+                                                                const result = await registerForSpotDeposits(accessToken);
+                                                                setSpotDepositAddress(result.evmDepositAddress || result.address);
+                                                                setSpotDepositMessage(result.message);
+                                                            } catch (err: any) {
+                                                                setSpotDepositMessage(err?.message || 'Registration failed');
+                                                            }
+                                                        }}
+                                                        disabled={isSpotRegistering || !accessToken}
+                                                        className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                                    >
+                                                        {isSpotRegistering ? (
+                                                            <>
+                                                                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                                                </svg>
+                                                                Signing...
+                                                            </>
+                                                        ) : (
+                                                            '🔐 Enable'
+                                                        )}
+                                                    </button>
+                                                </div>
+                                                {spotDepositMessage && (
+                                                    <p className={`text-xs mt-2 ${spotDepositError ? 'text-red-600' : 'text-sky-600'}`}>
+                                                        {spotDepositMessage}
+                                                    </p>
+                                                )}
+                                                {spotDepositError && (
+                                                    <p className="text-xs mt-1 text-red-600">{spotDepositError}</p>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Activate Spot on a chain: deploy + Permit2-approve so spot funds
+                                        can be withdrawn/swapped (orchestrator sources via Permit2 transferFrom). */}
+                                    <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg">
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <p className="text-sm font-semibold text-purple-800">Activate Spot on Arbitrum</p>
+                                                <p className="text-xs text-purple-600">Deploy + approve Permit2 (USDC, USDT) — required once before you can withdraw/swap spot funds on Arbitrum</p>
+                                            </div>
+                                            <button
+                                                onClick={async () => {
+                                                    if (!accessToken) return;
+                                                    setActivateMessage(null);
+                                                    try {
+                                                        const result = await activateSpotOnChain({
+                                                            accessToken,
+                                                            chainId: 42161,
+                                                            tokenAddresses: [
+                                                                '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', // USDC (Arb)
+                                                                '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', // USDT (Arb)
+                                                            ],
+                                                        });
+                                                        setActivateMessage(`Activated ✓  tx: ${result.hash}`);
+                                                    } catch (err: any) {
+                                                        setActivateMessage(err?.message || 'Activation failed');
+                                                    }
+                                                }}
+                                                disabled={isDeploying || !accessToken}
+                                                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                {isDeploying ? 'Activating…' : '⚡ Activate'}
+                                            </button>
+                                        </div>
+                                        {activateMessage && (
+                                            <p className="text-xs mt-2 text-purple-700 break-all">{activateMessage}</p>
+                                        )}
+                                    </div>
+
+                                    {/* TEMP (deposit debug): pre-deploy the Money wallet on Base so the
+                                        first deposit only enables the session, not deploy+enable in one tx. */}
+                                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <p className="text-sm font-semibold text-amber-800">Deploy Money Wallet (Base)</p>
+                                                <p className="text-xs text-amber-600">One-time: install the wallet on-chain before the first deposit</p>
+                                            </div>
+                                            <button
+                                                onClick={async () => {
+                                                    if (!accessToken) return;
+                                                    setDeployMessage(null);
+                                                    try {
+                                                        const r = await deployWallet({ accessToken, walletType: 'money', chainId: 8453 });
+                                                        setDeployMessage(`deployed=${r.deployed} — ${r.address}`);
+                                                    } catch (err: any) {
+                                                        setDeployMessage(err?.message || 'Deploy failed');
+                                                    }
+                                                }}
+                                                disabled={isDeploying || !accessToken}
+                                                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50"
+                                            >
+                                                {isDeploying ? 'Deploying…' : '🚀 Deploy'}
+                                            </button>
+                                        </div>
+                                        {deployMessage && (
+                                            <p className="text-xs mt-2 text-amber-700 break-all">{deployMessage}</p>
                                         )}
                                     </div>
 

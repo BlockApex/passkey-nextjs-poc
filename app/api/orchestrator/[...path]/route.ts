@@ -86,6 +86,14 @@ async function handler(
             'Content-Type': 'application/json',
             'x-api-key': apiKey,
         };
+        // Forward the SDK's version headers so the orchestrator answers in the v2
+        // format the SDK sends (CAIP-2 chain ids) and parses (`routes`). Without
+        // them it falls back to legacy v1 (numeric ids + intentOp/intentCost) and
+        // the request/response formats mismatch ("expected number" / "no quote").
+        for (const h of ['x-api-version', 'x-sdk-version']) {
+            const v = req.headers.get(h);
+            if (v) headers[h] = v;
+        }
 
         const fetchOptions: RequestInit = {
             method: req.method,
