@@ -1,10 +1,21 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useRhinestoneTransfer } from '@/hooks/useRhinestoneTransfer';
+import { signedFetch } from '@/lib/api/signedFetch';
 
 type WalletType = 'money' | 'spot';
+
+/** One withdrawable spot position: an asset on a specific chain, with its balance. */
+type Holding = {
+    key: string; // `${symbol}-${chainId}`
+    symbol: string;
+    chainId: number;
+    network: string;
+    balance: string; // human-readable
+    usdValue: number;
+};
 
 /** Block explorer tx URL by chainId (for the success link). */
 function explorerTx(chainId: number, hash: string): string {
@@ -21,8 +32,12 @@ function explorerTx(chainId: number, hash: string): string {
 
 /**
  * Isolated test screen for Withdraw — send funds OUT to an external EVM address.
- * Money withdraws USDT0 on Plasma; Spot withdraws the chosen asset on its own
- * chain (symbol + chainId). Same-chain, 0.1% fee deducted.
+ * Money withdraws USDT0 on Plasma; Spot withdraws a chosen holding on its own
+ * chain. Same-chain, 0.1% fee deducted.
+ *
+ * Spot assets/chains are NOT free-typed — you pick from the wallet's real
+ * holdings (asset + chain, from /transactions/dashboard), so you can't submit a
+ * symbol/chain you don't actually hold (which just simulation-fails on balance).
  */
 export default function WithdrawPage() {
     const router = useRouter();
@@ -32,10 +47,22 @@ export default function WithdrawPage() {
     const [walletType, setWalletType] = useState<WalletType>('money');
     const [toAddress, setToAddress] = useState('');
     const [amount, setAmount] = useState('');
-    const [symbol, setSymbol] = useState('USDC');
-    const [chainId, setChainId] = useState('8453');
     const [result, setResult] = useState<{ hash: string; chainId: number } | null>(null);
     const [localError, setLocalError] = useState<string | null>(null);
+
+    // Spot holdings (asset × chain) fetched from the dashboard.
+    const [holdings, setHoldings] = useState<Holding[]>([]);
+    const [loadingHoldings, setLoadingHoldings] = useState(false);
+    const [selectedKey, setSelectedKey] = useState<string>('');
+    // Manual fallback when no holdings are detected (keeps the flow usable).
+    const [manual, setManual] = useState(false);
+    const [manualSymbol, setManualSymbol] = useState('USDC');
+    const [manualChainId, setManualChainId] = useState('8453');
+
+    const selected = holdings.find((h) => h.key === selectedKey) ?? null;
+    // The effective asset + chain that will be submitted for a spot withdraw.
+    const spotSymbol = manual ? manualSymbol : selected?.symbol ?? '';
+    const spotChainId = manual ? manualChainId : selected ? String(selected.chainId) : '';
 
     useEffect(() => {
         const token = localStorage.getItem('accessToken');
@@ -43,14 +70,58 @@ export default function WithdrawPage() {
         setAccessToken(token);
     }, [router]);
 
+    /** Flatten dashboard assets → one entry per (asset, EVM chain) with a balance. */
+    const fetchHoldings = useCallback(async () => {
+        setLoadingHoldings(true);
+        try {
+            const res = await signedFetch(
+                '/transactions/dashboard?walletType=spot',
+                { auth: true },
+            );
+            if (!res.ok) return;
+            const d = await res.json();
+            const flat: Holding[] = [];
+            for (const a of (d.assets ?? []) as any[]) {
+                for (const c of (a.chains ?? []) as any[]) {
+                    if (c.type !== 'evm') continue; // withdraw is EVM-only
+                    if (!(parseFloat(c.balance) > 0)) continue; // skip empties
+                    flat.push({
+                        key: `${a.symbol}-${c.chainId}`,
+                        symbol: a.symbol,
+                        chainId: c.chainId,
+                        network: c.network ?? String(c.chainId),
+                        balance: c.balance,
+                        usdValue: c.usdValue ?? 0,
+                    });
+                }
+            }
+            flat.sort((x, y) => y.usdValue - x.usdValue);
+            setHoldings(flat);
+            setManual(flat.length === 0); // no holdings → manual fallback
+            setSelectedKey((prev) =>
+                flat.find((h) => h.key === prev)?.key ?? flat[0]?.key ?? '',
+            );
+        } catch {
+            /* leave holdings empty; manual fallback covers it */
+            setManual(true);
+        } finally {
+            setLoadingHoldings(false);
+        }
+    }, []);
+
+    // Load holdings when the user switches to the Spot tab.
+    useEffect(() => {
+        if (walletType === 'spot' && accessToken) fetchHoldings();
+    }, [walletType, accessToken, fetchHoldings]);
+
     const handleWithdraw = async () => {
         setResult(null);
         setLocalError(null);
         if (!accessToken) return;
         if (!toAddress) { setLocalError('Enter a destination address'); return; }
         if (!amount) { setLocalError('Enter an amount'); return; }
-        if (walletType === 'spot' && (!symbol || !chainId)) {
-            setLocalError('Spot needs a symbol and chainId');
+        if (walletType === 'spot' && (!spotSymbol || !spotChainId)) {
+            setLocalError('Pick an asset to withdraw');
             return;
         }
         try {
@@ -60,16 +131,17 @@ export default function WithdrawPage() {
                 toAddress: toAddress.trim(),
                 amount: amount.trim(),
                 ...(walletType === 'spot'
-                    ? { symbol: symbol.trim(), chainId: parseInt(chainId, 10) }
+                    ? { symbol: spotSymbol.trim(), chainId: parseInt(spotChainId, 10) }
                     : {}),
             });
-            setResult({ hash: res.hash, chainId: walletType === 'money' ? 9745 : parseInt(chainId, 10) });
+            setResult({ hash: res.hash, chainId: walletType === 'money' ? 9745 : parseInt(spotChainId, 10) });
         } catch (e: any) {
             setLocalError(e?.message || 'Withdraw failed');
         }
     };
 
     const shown = localError || error;
+    const input = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-black';
 
     return (
         <div className="min-h-screen bg-slate-50 p-6">
@@ -95,26 +167,81 @@ export default function WithdrawPage() {
                     </div>
 
                     {walletType === 'spot' && (
-                        <div className="grid grid-cols-2 gap-2 mt-4">
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">Symbol</label>
-                                <input
-                                    value={symbol}
-                                    onChange={(e) => setSymbol(e.target.value)}
-                                    placeholder="USDC"
-                                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-black"
-                                />
+                        <div className="mt-4">
+                            <div className="flex items-center justify-between mb-1">
+                                <label className="block text-sm font-medium text-slate-700">Asset to withdraw</label>
+                                <button
+                                    onClick={fetchHoldings}
+                                    disabled={loadingHoldings}
+                                    className="text-xs text-emerald-700 hover:underline disabled:opacity-50"
+                                >
+                                    {loadingHoldings ? 'Loading…' : '↻ Refresh'}
+                                </button>
                             </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">Chain ID</label>
-                                <input
-                                    value={chainId}
-                                    onChange={(e) => setChainId(e.target.value)}
-                                    placeholder="8453"
-                                    inputMode="numeric"
-                                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-black"
-                                />
-                            </div>
+
+                            {!manual ? (
+                                <>
+                                    <select
+                                        value={selectedKey}
+                                        onChange={(e) => setSelectedKey(e.target.value)}
+                                        className={input}
+                                    >
+                                        {holdings.map((h) => (
+                                            <option key={h.key} value={h.key}>
+                                                {h.symbol} on {h.network} — {h.balance} (${h.usdValue.toFixed(2)})
+                                            </option>
+                                        ))}
+                                    </select>
+                                    {selected && (
+                                        <div className="mt-1 flex items-center justify-between text-xs text-slate-500">
+                                            <span>Available: {selected.balance} {selected.symbol}</span>
+                                            <button
+                                                onClick={() => setAmount(selected.balance)}
+                                                className="text-emerald-700 hover:underline"
+                                            >
+                                                Max
+                                            </button>
+                                        </div>
+                                    )}
+                                    <button
+                                        onClick={() => setManual(true)}
+                                        className="mt-2 text-xs text-slate-400 hover:text-slate-600 hover:underline"
+                                    >
+                                        Enter manually instead
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <input
+                                            value={manualSymbol}
+                                            onChange={(e) => setManualSymbol(e.target.value)}
+                                            placeholder="Symbol (USDC)"
+                                            className={input}
+                                        />
+                                        <input
+                                            value={manualChainId}
+                                            onChange={(e) => setManualChainId(e.target.value)}
+                                            placeholder="Chain ID (8453)"
+                                            inputMode="numeric"
+                                            className={input}
+                                        />
+                                    </div>
+                                    <p className="mt-1 text-xs text-amber-600">
+                                        {holdings.length === 0
+                                            ? 'No spot holdings detected — enter the asset + chain manually.'
+                                            : 'Manual entry — make sure you actually hold this asset on this chain.'}
+                                    </p>
+                                    {holdings.length > 0 && (
+                                        <button
+                                            onClick={() => setManual(false)}
+                                            className="mt-1 text-xs text-emerald-700 hover:underline"
+                                        >
+                                            Pick from my holdings instead
+                                        </button>
+                                    )}
+                                </>
+                            )}
                         </div>
                     )}
 
@@ -123,18 +250,18 @@ export default function WithdrawPage() {
                         value={toAddress}
                         onChange={(e) => setToAddress(e.target.value)}
                         placeholder="0x…"
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-black font-mono text-sm"
+                        className={input + ' font-mono text-sm'}
                     />
 
                     <label className="block text-sm font-medium text-slate-700 mt-4 mb-1">
-                        Amount ({walletType === 'money' ? 'USDT0' : symbol || 'token'})
+                        Amount ({walletType === 'money' ? 'USDT0' : spotSymbol || 'token'})
                     </label>
                     <input
                         value={amount}
                         onChange={(e) => setAmount(e.target.value)}
                         placeholder="10"
                         inputMode="decimal"
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-black"
+                        className={input}
                     />
 
                     <button
